@@ -1,0 +1,9 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+anthropic>=2.8
+faster-whisper>=1.1
+pillow>=11
+pillow-heif>=0.20
+weasyprint>=63
+jinja2>=3.1
+zipstream-ng>=1.8

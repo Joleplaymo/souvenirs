@@ -1,0 +1,7 @@
+Musiques de fond du montage vidéo.
+
+Les quatre morceaux fournis (detendu, sportif, humour, emotion) sont produits par synthèse
+avec tools/make_music.py : ils n'ont aucun ayant droit tiers et sont utilisables librement.
+
+Le montage prend le fichier <ton>.mp3 correspondant au ton de l'événement. Pour utiliser ta
+propre musique, remplace le fichier du même nom par un MP3 dont tu as les droits.

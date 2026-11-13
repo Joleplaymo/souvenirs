@@ -1,0 +1,168 @@
+{
+ "name": "Week-end entre copains",
+ "type": "weekend",
+ "tone": "detendu",
+ "days": 2,
+ "participants": [
+  "Léa",
+  "Camille",
+  "Tom",
+  "Max"
+ ],
+ "items": [
+  {
+   "day": 0,
+   "time": "09:05",
+   "author": "Léa",
+   "kind": "note",
+   "text": "Départ de Lyon, la voiture est pleine à craquer. Max a encore oublié son sac de couchage."
+  },
+  {
+   "day": 0,
+   "time": "09:40",
+   "author": "Léa",
+   "kind": "photo",
+   "file": "01-route.jpg"
+  },
+  {
+   "day": 0,
+   "time": "11:30",
+   "author": "Léa",
+   "kind": "dictee",
+   "file": "02-arrivee.m4a"
+  },
+  {
+   "day": 0,
+   "time": "11:40",
+   "author": "Tom",
+   "kind": "photo",
+   "file": "03-gite.jpg"
+  },
+  {
+   "day": 0,
+   "time": "11:42",
+   "author": "Tom",
+   "kind": "photo",
+   "file": "04-sapins.jpg"
+  },
+  {
+   "day": 0,
+   "time": "13:15",
+   "author": "Max",
+   "kind": "video",
+   "file": "05-montee.mp4"
+  },
+  {
+   "day": 0,
+   "time": "14:00",
+   "author": "Camille",
+   "kind": "photo",
+   "file": "06-sommet.jpg"
+  },
+  {
+   "day": 0,
+   "time": "14:20",
+   "author": "Camille",
+   "kind": "conversation",
+   "file": "07-pain.m4a"
+  },
+  {
+   "day": 0,
+   "time": "14:25",
+   "author": "Léa",
+   "kind": "photo",
+   "file": "08-pique-nique.jpg"
+  },
+  {
+   "day": 0,
+   "time": "16:30",
+   "author": "Tom",
+   "kind": "video",
+   "file": "09-lac.mp4"
+  },
+  {
+   "day": 0,
+   "time": "16:40",
+   "author": "Max",
+   "kind": "photo",
+   "file": "10-lac.jpg"
+  },
+  {
+   "day": 0,
+   "time": "16:45",
+   "author": "Camille",
+   "kind": "photo",
+   "file": "11-baignade.jpg"
+  },
+  {
+   "day": 0,
+   "time": "20:30",
+   "author": "Tom",
+   "kind": "photo",
+   "file": "12-feu.jpg"
+  },
+  {
+   "day": 0,
+   "time": "21:00",
+   "author": "Max",
+   "kind": "dictee",
+   "file": "13-soiree.m4a"
+  },
+  {
+   "day": 0,
+   "time": "23:10",
+   "author": "Léa",
+   "kind": "photo",
+   "file": "14-etoiles.jpg"
+  },
+  {
+   "day": 1,
+   "time": "06:45",
+   "author": "Camille",
+   "kind": "photo",
+   "file": "15-lever.jpg"
+  },
+  {
+   "day": 1,
+   "time": "06:50",
+   "author": "Camille",
+   "kind": "note",
+   "text": "Lever de soleil à 6 h 45. J'étais la seule debout, et ça valait le coup."
+  },
+  {
+   "day": 1,
+   "time": "10:30",
+   "author": "Léa",
+   "kind": "video",
+   "file": "16-petanque.mp4"
+  },
+  {
+   "day": 1,
+   "time": "10:45",
+   "author": "Max",
+   "kind": "photo",
+   "file": "17-boules.jpg"
+  },
+  {
+   "day": 1,
+   "time": "15:00",
+   "author": "Tom",
+   "kind": "photo",
+   "file": "18-depart.jpg"
+  },
+  {
+   "day": 1,
+   "time": "15:10",
+   "author": "Tom",
+   "kind": "dictee",
+   "file": "19-fin.m4a"
+  },
+  {
+   "day": 1,
+   "time": "15:20",
+   "author": "Max",
+   "kind": "note",
+   "text": "Promis, l'an prochain je prends le pain."
+  }
+ ]
+}

@@ -1,0 +1,54 @@
+# Souvenirs — compte rendu d'événement entre amis.
+#   docker compose up -d --build
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Renseigne DOMAIN dans .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+  app:
+    build: .
+    image: souvenirs:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Tâches de fond : préparation des médias, transcription Whisper, appels Claude,
+  # montage FFmpeg, album PDF, purge automatique des fichiers bruts.
+  worker:
+    image: souvenirs:latest
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - data:/data
+    depends_on:
+      - app
+
+volumes:
+  data:          # médias bruts, résultats, base SQLite, modèle Whisper
+  caddy_data:    # certificats HTTPS
+  caddy_config:

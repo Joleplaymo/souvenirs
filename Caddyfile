@@ -1,0 +1,15 @@
+# HTTPS automatique (Let's Encrypt). HTTP est redirigé vers HTTPS par Caddy.
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Robots-Tag "noindex, nofollow, noarchive"
+		X-Frame-Options "SAMEORIGIN"
+		Permissions-Policy "microphone=(self), camera=(self), geolocation=()"
+		-Server
+	}
+	reverse_proxy app:8000 {
+		# envois par morceaux et gros téléchargements : pas de mise en tampon
+		flush_interval -1
+	}
+}
