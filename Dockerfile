@@ -7,11 +7,11 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- Application + tâches de fond (FFmpeg, Whisper, WeasyPrint) ---
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
-      fonts-playfair-display fonts-lato fonts-dejavu-core tzdata \
+      fonts-lato fonts-dejavu-core fonts-liberation tzdata \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.txt .

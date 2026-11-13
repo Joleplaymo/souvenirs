@@ -10,8 +10,8 @@ cp .env.example .env    # puis renseigner DOMAIN, ADMIN_CODE, ANTHROPIC_API_KEY
 docker compose up -d --build
 ```
 
-Trois services : `caddy` (HTTPS), `app` (API FastAPI + interface), `worker` (Whisper, FFmpeg,
-appels Claude, PDF, purge). Toutes les données sont dans le volume `data`.
+Deux services derrière le Traefik du VPS (qui gère HTTPS) : `app` (API FastAPI + interface) et
+`worker` (Whisper, FFmpeg, appels Claude, PDF, purge). Toutes les données sont dans le volume `data`.
 
 L'événement de démonstration « Week-end entre copains » est créé au premier démarrage ; on le
 retrouve sur la page d'accueil, dans « Mes événements », après saisie du code administrateur.

@@ -1,54 +1,57 @@
 # Souvenirs — compte rendu d'événement entre amis.
+# Derrière le Traefik du VPS : il lit les labels ci-dessous, gère HTTPS (Let's Encrypt)
+# et joint le conteneur par son réseau par défaut. Aucun port n'est publié sur l'hôte.
 #   docker compose up -d --build
-services:
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      DOMAIN: ${DOMAIN:?Renseigne DOMAIN dans .env}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - app
+x-env: &env
+  DATA_DIR: /data
+  ADMIN_CODE: ${ADMIN_CODE:?Renseigne ADMIN_CODE}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-opus-5-5}
+  WHISPER_MODEL: ${WHISPER_MODEL:-small}
+  WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-fr}
+  TZ: ${TZ:-Europe/Paris}
+  RAW_RETENTION_DAYS: ${RAW_RETENTION_DAYS:-90}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-2048}
+  DEMO_EVENT: ${DEMO_EVENT:-true}
 
+services:
   app:
     build: .
     image: souvenirs:latest
     restart: unless-stopped
-    env_file: .env
-    environment:
-      DATA_DIR: /data
+    environment: *env
     volumes:
       - data:/data
-    expose:
-      - "8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/healthz')"]
       interval: 30s
       timeout: 5s
       retries: 3
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.souvenirs.rule=Host(`${DOMAIN:?Renseigne DOMAIN}`)
+      - traefik.http.routers.souvenirs.entrypoints=${TRAEFIK_ENTREE:-websecure}
+      - traefik.http.routers.souvenirs.tls=true
+      - traefik.http.routers.souvenirs.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      - traefik.http.routers.souvenirs.middlewares=souvenirs-headers
+      - traefik.http.middlewares.souvenirs-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.souvenirs-headers.headers.frameDeny=true
+      - traefik.http.middlewares.souvenirs-headers.headers.customResponseHeaders.X-Robots-Tag=noindex, nofollow, noarchive
+      - traefik.http.middlewares.souvenirs-headers.headers.permissionsPolicy=microphone=(self), camera=(self), geolocation=()
+      - traefik.http.services.souvenirs.loadbalancer.server.port=8000
 
   # Tâches de fond : préparation des médias, transcription Whisper, appels Claude,
   # montage FFmpeg, album PDF, purge automatique des fichiers bruts.
   worker:
+    build: .
     image: souvenirs:latest
     restart: unless-stopped
     command: ["python", "-m", "app.worker"]
-    env_file: .env
-    environment:
-      DATA_DIR: /data
+    environment: *env
     volumes:
       - data:/data
     depends_on:
       - app
 
 volumes:
-  data:          # médias bruts, résultats, base SQLite, modèle Whisper
-  caddy_data:    # certificats HTTPS
-  caddy_config:
+  data:   # médias bruts, résultats, base SQLite, modèle Whisper
