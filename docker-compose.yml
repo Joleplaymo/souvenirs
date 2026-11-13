@@ -35,7 +35,7 @@ services:
       - traefik.http.routers.souvenirs.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
       - traefik.http.routers.souvenirs.middlewares=souvenirs-headers
       - traefik.http.middlewares.souvenirs-headers.headers.stsSeconds=31536000
-      - traefik.http.middlewares.souvenirs-headers.headers.frameDeny=true
+      - traefik.http.middlewares.souvenirs-headers.headers.customFrameOptionsValue=SAMEORIGIN
       - traefik.http.middlewares.souvenirs-headers.headers.customResponseHeaders.X-Robots-Tag=noindex, nofollow, noarchive
       - traefik.http.middlewares.souvenirs-headers.headers.permissionsPolicy=microphone=(self), camera=(self), geolocation=()
       - traefik.http.services.souvenirs.loadbalancer.server.port=8000
