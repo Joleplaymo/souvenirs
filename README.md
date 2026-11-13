@@ -26,3 +26,9 @@ retrouve sur la page d'accueil, dans « Mes événements », après saisie du co
 | `frontend/` | interface React (Vite), installable sur l'écran d'accueil |
 | `music/` | musiques de fond synthétisées, libres de droits (`tools/make_music.py`) |
 | `demo/` | médias de l'événement de démonstration (`tools/make_demo.py`) |
+
+## Déploiement sans dépôt Git
+
+`python tools/make_vps_compose.py` produit `deploy/docker-compose.vps.yml`, un fichier Compose
+autonome : le code source y est intégré, et les musiques, médias de démo et icônes sont
+régénérés pendant le build. C'est ce fichier qui est déployé sur le VPS par le connecteur Hostinger.
