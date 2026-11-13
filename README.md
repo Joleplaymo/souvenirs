@@ -27,8 +27,11 @@ retrouve sur la page d'accueil, dans « Mes événements », après saisie du co
 | `music/` | musiques de fond synthétisées, libres de droits (`tools/make_music.py`) |
 | `demo/` | médias de l'événement de démonstration (`tools/make_demo.py`) |
 
-## Déploiement sans dépôt Git
+## Déploiement sur le VPS Hostinger
 
-`python tools/make_vps_compose.py` produit `deploy/docker-compose.vps.yml`, un fichier Compose
-autonome : le code source y est intégré, et les musiques, médias de démo et icônes sont
-régénérés pendant le build. C'est ce fichier qui est déployé sur le VPS par le connecteur Hostinger.
+Le projet Docker `souvenirs` du VPS est créé depuis l'adresse de ce dépôt
+(`https://github.com/Joleplaymo/souvenirs`) : le Docker Manager de Hostinger clone le dépôt,
+construit l'image avec `docker-compose.yml` et la lance derrière le Traefik du VPS. Les variables
+(`DOMAIN`, `ADMIN_CODE`, `ANTHROPIC_API_KEY`…) sont stockées dans l'environnement du projet.
+Pour déployer une nouvelle version : pousser sur `main`, puis recréer le projet avec la même adresse
+(les données restent dans le volume `souvenirs_data`).
