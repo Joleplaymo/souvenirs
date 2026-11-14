@@ -83,6 +83,21 @@ function Lightbox({ slug, item, onClose }) {
   );
 }
 
+// Aperçu d'un souvenir encore sur le téléphone (lu depuis la file d'envoi, pas depuis le serveur).
+function PendingThumb({ p }) {
+  const [url, setUrl] = useState(null);
+  const [broken, setBroken] = useState(false);
+  useEffect(() => {
+    if (!(p.blob instanceof Blob) || !["photo", "video"].includes(p.kind)) return;
+    const u = URL.createObjectURL(p.blob);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [p.cid]);
+  if (url && !broken && p.kind === "photo") return <img src={url} alt="" onError={() => setBroken(true)} />;
+  if (url && !broken && p.kind === "video") return <video src={`${url}#t=0.1`} muted playsInline preload="metadata" onError={() => setBroken(true)} />;
+  return <span className="pending-icon">{KIND[p.kind].icon}{p.kind === "note" && p.text ? <small>{p.text.slice(0, 60)}</small> : null}</span>;
+}
+
 export default function Capture({ slug, ev, onEvent }) {
   const [items, setItems] = useState(null);
   const [rec, setRec] = useState(null);
@@ -150,19 +165,32 @@ export default function Capture({ slug, ev, onEvent }) {
       <input ref={inputs.video} type="file" accept="video/*" capture="environment" hidden onChange={onFiles("video")} />
       <input ref={inputs.any} type="file" accept="image/*,video/*" multiple hidden onChange={onFiles(null)} />
 
-      {sending.length > 0 && (
-        <div className="pending" role="status">
-          <div>⏫ {sending.length} envoi{sending.length > 1 ? "s" : ""} en cours{navigator.onLine ? "" : " — en attente de réseau"}</div>
-          <progress value={total ? sent / total : 0} max="1" />
-          <div className="muted small">Tes souvenirs sont gardés sur le téléphone jusqu'à l'envoi complet.</div>
+      {pend.length > 0 && (
+        <div className={`pending${failed.length && !sending.length ? " bad" : ""}`} role="status">
+          {sending.length > 0 && <>
+            <div>⏫ {sending.length} envoi{sending.length > 1 ? "s" : ""} en cours{navigator.onLine ? "" : " — en attente de réseau"}</div>
+            <progress value={total ? sent / total : 0} max="1" />
+          </>}
+          {failed.length > 0 && <div className="error small">⚠️ {failed.length} envoi{failed.length > 1 ? "s" : ""} refusé{failed.length > 1 ? "s" : ""} — retire-{failed.length > 1 ? "les" : "le"} ci-dessous.</div>}
+          <div className="muted small">Tes souvenirs sont gardés sur le téléphone jusqu'à l'envoi complet. Touche ✕ pour retirer ceux que tu ne veux plus envoyer.</div>
+          <ul className="pending-grid">
+            {pend.map((p) => (
+              <li key={p.cid} className={p.state === "erreur" ? "bad" : p.state === "envoi" ? "busy" : ""} title={p.error || p.filename || KIND[p.kind].label}>
+                <PendingThumb p={p} />
+                {p.state === "envoi" && <progress value={p.size ? (p.sent || 0) / p.size : 0} max="1" />}
+                {p.state === "erreur" && <span className="pending-err">refusé</span>}
+                <button className="pending-x" aria-label={`Retirer ${p.kind === "photo" ? "cette photo" : "ce souvenir"} de l'envoi`}
+                  onClick={async () => { await queue.discard(p.cid); setToast(`${KIND[p.kind].label} retirée`); }}>✕</button>
+              </li>
+            ))}
+          </ul>
+          {pend.length > 1 && (
+            <button className="link danger" onClick={() => {
+              if (confirm(`Retirer les ${pend.length} souvenirs en attente ? Ils ne seront pas envoyés (ils restent dans la galerie du téléphone s'ils en viennent).`)) queue.discardAll(slug);
+            }}>Tout retirer</button>
+          )}
         </div>
       )}
-      {failed.map((p) => (
-        <div className="pending bad" key={p.cid}>
-          <div>⚠️ {KIND[p.kind].label} refusée : {p.error}</div>
-          <button className="link" onClick={() => queue.discard(p.cid)}>Abandonner cet envoi</button>
-        </div>
-      ))}
 
       <h2 className="feed-title">Derniers souvenirs du groupe</h2>
       {items && items.length === 0 && <p className="muted center">Rien pour l'instant. À toi d'ouvrir le carnet !</p>}

@@ -91,6 +91,17 @@ textarea { resize: vertical; line-height: 1.5; }
 .cap.photo { background: #b07a1e; } .cap.note { background: #5f7355; grid-column: 1 / -1; min-height: 84px; flex-direction: row; gap: 12px; }
 .pending { background: var(--accent-soft); border-radius: 12px; padding: 12px 14px; margin: 14px 0; }
 .pending.bad { border: 1.5px solid var(--danger); }
+.pending-grid { list-style: none; padding: 0; margin: 10px 0 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; }
+.pending-grid li { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: var(--card); border: 1px solid var(--line); }
+.pending-grid li.bad { border: 2px solid var(--danger); }
+.pending-grid img, .pending-grid video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pending-grid li.busy img, .pending-grid li.busy video { opacity: .75; }
+.pending-icon { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: 100%; font-size: 1.6rem; text-align: center; padding: 4px; }
+.pending-icon small { font-size: .65rem; line-height: 1.15; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.pending-grid progress { position: absolute; left: 4px; right: 4px; bottom: 4px; width: calc(100% - 8px); height: 6px; }
+.pending-err { position: absolute; left: 0; right: 0; bottom: 0; background: var(--danger); color: #fff; font-size: .7rem; text-align: center; padding: 1px 0; }
+.pending-x { position: absolute; top: 3px; right: 3px; width: 30px; height: 30px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: .95rem; line-height: 1; cursor: pointer; padding: 0; }
+.pending-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .feed-title { margin: 26px 0 10px; }
 .feed, .passages, .segments { list-style: none; padding: 0; margin: 0; }

@@ -251,6 +251,9 @@ async def upload_chunk(uid: str, request: Request, offset: int = Query(...), x_p
             if offset + got > up["size"]:
                 err(400, "Plus de données que la taille annoncée.")
             f.write(chunk)
+    if db.one("SELECT id FROM uploads WHERE id=?", uid) is None:  # envoi annulé pendant l'écriture
+        path.unlink(missing_ok=True)
+        err(404, "Envoi annulé.")
     db.update("uploads", "id", uid, received=offset + got)
     return {"received": offset + got}
 
@@ -299,6 +302,18 @@ def _rerender(event_id: int, parts: set):
         db.enqueue(event_id, "generate", parts=sorted(parts), ai=False)
 
 
+def _delete_item(ev, it):
+    item_id = it["id"]
+    stale = _remove_from_draft(ev["id"], item_id)
+    base = config.event_dir(ev["id"])
+    if it["path"]:
+        (base / it["path"]).unlink(missing_ok=True)
+    for f in (base / "derived").glob(f"{item_id}_*.jpg"):
+        f.unlink(missing_ok=True)
+    db.run("DELETE FROM items WHERE id=?", item_id)
+    _rerender(ev["id"], stale)
+
+
 @app.delete("/api/events/{slug}/items/{item_id}")
 def delete_item(slug: str, item_id: int, x_participant_token: str = Header(None), x_admin_token: str = Header(None)):
     ev = get_event(slug)
@@ -309,14 +324,25 @@ def delete_item(slug: str, item_id: int, x_participant_token: str = Header(None)
         p = require_participant(ev, x_participant_token)
         if p["id"] != it["participant_id"]:
             err(403, "Tu ne peux supprimer que tes propres souvenirs.")
-    stale = _remove_from_draft(ev["id"], item_id)
-    base = config.event_dir(ev["id"])
-    if it["path"]:
-        (base / it["path"]).unlink(missing_ok=True)
-    for f in (base / "derived").glob(f"{item_id}_*.jpg"):
-        f.unlink(missing_ok=True)
-    db.run("DELETE FROM items WHERE id=?", item_id)
-    _rerender(ev["id"], stale)
+    _delete_item(ev, it)
+    return {"ok": True}
+
+
+@app.delete("/api/events/{slug}/uploads/{client_id}")
+def cancel_upload(slug: str, client_id: str, x_participant_token: str = Header(None)):
+    """Annule un envoi en attente depuis le téléphone : efface l'envoi partiel, ou le souvenir s'il a eu le
+    temps d'arriver entre-temps."""
+    ev = get_event(slug)
+    p = require_participant(ev, x_participant_token)
+    up = db.one("SELECT id FROM uploads WHERE client_id=? AND event_id=? AND participant_id=?",
+                client_id, ev["id"], p["id"])
+    if up:
+        db.run("DELETE FROM uploads WHERE id=?", up["id"])
+        (config.event_dir(ev["id"]) / "uploads" / up["id"]).unlink(missing_ok=True)
+    it = db.one("SELECT * FROM items WHERE client_id=? AND event_id=? AND participant_id=?",
+                client_id, ev["id"], p["id"])
+    if it:
+        _delete_item(ev, it)
     return {"ok": True}
 
 
