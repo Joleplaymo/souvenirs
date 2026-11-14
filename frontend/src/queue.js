@@ -7,6 +7,8 @@ let dbp = null;
 const listeners = new Set();
 const live = new Map(); // cid → { sent, size, state, error }
 let running = false;
+let current = null; // { cid, ctrl } : l'envoi en cours, pour pouvoir l'interrompre
+const cancelled = new Set(); // envois retirés par l'utilisateur pendant cette session
 let memory = []; // repli si IndexedDB est indisponible (navigation privée)
 
 function open() {
@@ -39,8 +41,8 @@ export function subscribe(fn) { listeners.add(fn); return () => listeners.delete
 
 export async function pending(slug) {
   const list = (await all()).filter((e) => e.slug === slug);
-  return list.map((e) => ({
-    cid: e.cid, kind: e.kind, size: e.size || 0,
+  return list.sort((a, b) => (a.captured_at < b.captured_at ? -1 : 1)).map((e) => ({
+    cid: e.cid, kind: e.kind, size: e.size || 0, blob: e.blob, mime: e.mime, filename: e.filename, text: e.text,
     ...(live.get(e.cid) || { sent: 0, state: "attente" }),
   }));
 }
@@ -52,10 +54,29 @@ export async function enqueue(entry) {
   kick();
 }
 
-export async function discard(cid) { await del(cid); live.delete(cid); emit(); }
+// Retire un souvenir de la file : il n'est plus envoyé, l'envoi en cours est interrompu et ce qui était
+// déjà arrivé sur le serveur (morceaux, ou souvenir complet si l'envoi venait de finir) est effacé.
+export async function discard(cid) {
+  const entry = (await all()).find((e) => e.cid === cid);
+  cancelled.add(cid);
+  if (current && current.cid === cid) current.ctrl.abort();
+  await del(cid);
+  live.delete(cid);
+  emit();
+  if (entry) forget(entry);
+}
 
-async function sendOne(e) {
-  const opt = { slug: e.slug };
+export async function discardAll(slug) {
+  for (const e of await pending(slug)) await discard(e.cid);
+}
+
+function forget(e) {
+  if (!tokens.participant(e.slug)) return;
+  api(`/events/${e.slug}/uploads/${encodeURIComponent(e.cid)}`, { slug: e.slug, method: "DELETE" }).catch(() => {});
+}
+
+async function sendOne(e, signal) {
+  const opt = { slug: e.slug, signal };
   if (e.type === "note") {
     await api(`/events/${e.slug}/notes`, { ...opt, method: "POST", body: { text: e.text, captured_at: e.captured_at, client_id: e.cid } });
     return;
@@ -68,17 +89,19 @@ async function sendOne(e) {
   let offset = start.received;
   const headers = { "X-Participant-Token": tokens.participant(e.slug) };
   while (offset < e.blob.size) {
+    if (signal.aborted) throw new DOMException("Envoi annulé", "AbortError");
     live.set(e.cid, { sent: offset, state: "envoi" });
     emit();
     try {
-      const r = await api(`/uploads/${start.id}?offset=${offset}`, { method: "PUT", raw: e.blob.slice(offset, offset + CHUNK), headers });
+      const r = await api(`/uploads/${start.id}?offset=${offset}`, { method: "PUT", raw: e.blob.slice(offset, offset + CHUNK), headers, signal });
       offset = r.received;
     } catch (err) {
       if (err.status === 409 && err.data) offset = err.data.received; // reprise là où le serveur en est
       else throw err;
     }
   }
-  await api(`/uploads/${start.id}/complete`, { method: "POST", headers });
+  if (signal.aborted) throw new DOMException("Envoi annulé", "AbortError");
+  await api(`/uploads/${start.id}/complete`, { method: "POST", headers, signal });
 }
 
 export async function kick() {
@@ -91,16 +114,22 @@ export async function kick() {
       if (!list.length) break;
       let progressed = false;
       for (const e of list) {
-        if (!tokens.participant(e.slug)) continue;
+        if (!tokens.participant(e.slug) || cancelled.has(e.cid)) continue;
+        const ctrl = new AbortController();
+        current = { cid: e.cid, ctrl };
         try {
-          await sendOne(e);
+          await sendOne(e, ctrl.signal);
+          if (cancelled.has(e.cid)) forget(e); // arrivé juste avant l'annulation : on l'efface du serveur
           await del(e.cid);
           live.delete(e.cid);
           progressed = true;
         } catch (err) {
+          if (cancelled.has(e.cid)) continue;
           const fatal = err.status && [400, 401, 404, 413].includes(err.status);
           live.set(e.cid, { sent: 0, state: fatal ? "erreur" : "attente", error: err.message });
           if (fatal && err.status !== 401) { /* gardé en file : l'utilisateur peut l'abandonner */ }
+        } finally {
+          current = null;
         }
         emit();
       }

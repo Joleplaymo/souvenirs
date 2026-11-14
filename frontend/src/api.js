@@ -18,8 +18,8 @@ export function authHeaders(slug) {
   return h;
 }
 
-export async function api(path, { method = "GET", body, slug, headers = {}, raw } = {}) {
-  const opts = { method, headers: { ...authHeaders(slug), ...headers } };
+export async function api(path, { method = "GET", body, slug, headers = {}, raw, signal } = {}) {
+  const opts = { method, headers: { ...authHeaders(slug), ...headers }, signal };
   if (raw !== undefined) opts.body = raw;
   else if (body !== undefined) {
     opts.body = JSON.stringify(body);
@@ -28,7 +28,8 @@ export async function api(path, { method = "GET", body, slug, headers = {}, raw 
   let res;
   try {
     res = await fetch(`/api${path}`, opts);
-  } catch {
+  } catch (err) {
+    if (signal && signal.aborted) throw err;
     const e = new Error("Pas de connexion. Réessaie dans un instant.");
     e.network = true;
     throw e;
