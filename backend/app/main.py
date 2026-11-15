@@ -11,7 +11,8 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from starlette.requests import ClientDisconnect
 
 from . import config, db
 from .pipeline import album as album_mod
@@ -244,18 +245,31 @@ async def upload_chunk(uid: str, request: Request, offset: int = Query(...), x_p
     d.mkdir(parents=True, exist_ok=True)
     path = d / uid
     got = 0
+    cut = False
     with open(path, "r+b" if path.exists() else "wb") as f:
         f.seek(offset)
         f.truncate()
-        async for chunk in request.stream():
-            got += len(chunk)
-            if offset + got > up["size"]:
-                err(400, "Plus de données que la taille annoncée.")
-            f.write(chunk)
+        try:
+            async for chunk in request.stream():
+                if offset + got + len(chunk) > up["size"]:
+                    err(400, "Plus de données que la taille annoncée.")
+                f.write(chunk)
+                got += len(chunk)
+        except ClientDisconnect:
+            # réseau coupé ou envoi interrompu par le téléphone : on garde ce qui est arrivé,
+            # la reprise repartira exactement d'ici
+            cut = True
     if db.one("SELECT id FROM uploads WHERE id=?", uid) is None:  # envoi annulé pendant l'écriture
         path.unlink(missing_ok=True)
+        if cut:
+            return Response(status_code=499)
         err(404, "Envoi annulé.")
-    db.update("uploads", "id", uid, received=offset + got)
+    # n'avance que si personne d'autre n'a écrit entre-temps (deux requêtes sur le même envoi)
+    moved = db.run("UPDATE uploads SET received=? WHERE id=? AND received=?", offset + got, uid, offset).rowcount
+    if cut:
+        return Response(status_code=499)
+    if not moved:
+        return JSONResponse({"received": db.one("SELECT received FROM uploads WHERE id=?", uid)["received"]}, status_code=409)
     return {"received": offset + got}
 
 
