@@ -171,4 +171,4 @@ details summary { cursor: pointer; padding: 10px 0; font-weight: 600; }
 .prose blockquote { margin: 1.2em 0; padding: .2em 0 .2em 1em; border-left: 4px solid var(--accent); font-style: italic; font-size: 1.2rem; }
 .prose ul { padding-left: 1.2em; }
 .album-cta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; background: var(--accent-soft); border-radius: 18px; padding: 18px 20px; margin: 32px 0; }
-.album-cta h2, .album-cta p { margin: 0; }
+.album-cta h2, .album-cta p { margin: 0; } .album-cta h2 + p { margin-top: 4px; }

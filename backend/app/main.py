@@ -6,6 +6,7 @@ import re
 import secrets
 import shutil
 import time
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -568,12 +569,28 @@ def download_all(slug: str, k: str = ""):
     """Archive ZIP de tous les fichiers bruts et des résultats (organisateur)."""
     ev = get_event(slug)
     require_admin(ev, k)
+    return _zip(ev, guest=False)
+
+
+@app.get("/api/events/{slug}/download-souvenir")
+def download_souvenir(slug: str):
+    """Archive ZIP pour les invités, depuis la page Souvenir : les fichiers sources (sans les passages écartés
+    par l'organisateur) et la version publiée du récit, du film et de l'album, jamais le brouillon."""
+    ev = get_event(slug)
+    if not ev["published_at"]:
+        err(404, "Le souvenir n'est pas encore publié.")
+    if ev["raw_purged_at"]:
+        err(410, "Les fichiers sources ont été supprimés du serveur.")
+    return _zip(ev, guest=True)
+
+
+def _zip(ev, guest: bool):
     from zipstream import ZIP_STORED, ZipStream
 
     zs = ZipStream(compress_type=ZIP_STORED)
     base = config.event_dir(ev["id"])
-    rows = db.q("""SELECT i.*, p.name AS author FROM items i JOIN participants p ON p.id=i.participant_id
-                   WHERE i.event_id=? ORDER BY i.captured_at""", ev["id"])
+    rows = db.q(f"""SELECT i.*, p.name AS author FROM items i JOIN participants p ON p.id=i.participant_id
+                    WHERE i.event_id=? {"AND i.excluded=0" if guest else ""} ORDER BY i.captured_at""", ev["id"])
     notes = []
     for it in rows:
         stamp = it["captured_at"][:19].replace(":", "-")
@@ -588,16 +605,19 @@ def download_all(slug: str, k: str = ""):
     if notes:
         zs.add("\n\n".join(notes).encode(), "notes-et-transcriptions.txt")
     rep = db.report(ev["id"])
-    if rep["text_md"]:
-        zs.add(rep["text_md"].encode(), "compte-rendu.md")
-    for which in ("published", "draft"):
+    text = rep["pub_text_md"] if guest else rep["text_md"]
+    if text:
+        zs.add(text.encode(), "compte-rendu.md")
+    for which in ("published",) if guest else ("published", "draft"):
         d = generate.out_dir(ev["id"], which)
         if (d / "video.mp4").exists() or (d / "album.pdf").exists():
             for n in ("video.mp4", "album.pdf"):
                 if (d / n).exists():
                     zs.add_path(str(d / n), f"resultats/{n}")
             break
-    fname = re.sub(r"[^\w\-]", "-", ev["name"]) or "souvenirs"
+    # nom de fichier sans accents : les navigateurs ne décodent pas tous un nom UTF-8 dans l'en-tête
+    plain = unicodedata.normalize("NFKD", ev["name"]).encode("ascii", "ignore").decode()
+    fname = re.sub(r"-{2,}", "-", re.sub(r"[^A-Za-z0-9\-]", "-", plain)).strip("-") or "souvenirs"
     return StreamingResponse(iter(zs), media_type="application/zip",
                              headers={"Content-Disposition": f'attachment; filename="{fname}.zip"'})
 
