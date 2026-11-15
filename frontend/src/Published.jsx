@@ -42,6 +42,18 @@ export default function Published({ slug, ev }) {
           <a className="btn primary big" href={`${base}/out/published/album.pdf${v}`} download>📕 Télécharger l'album (PDF)</a>
         </section>
       )}
+      {!ev.raw_purged && (
+        <section className="album-cta">
+          <div>
+            <h2>Tous les fichiers du souvenir</h2>
+            <p className="muted">
+              Les photos, vidéos, dictées et conversations d'origine, les notes et transcriptions, avec le récit, le film et l'album, dans une seule archive ZIP.
+              {ev.raw_purge_on && ` Les fichiers d'origine seront effacés du serveur le ${new Date(ev.raw_purge_on + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })} : pense à les récupérer avant.`}
+            </p>
+          </div>
+          <a className="btn big" href={`${base}/download-souvenir`} download>📦 Télécharger tout (ZIP)</a>
+        </section>
+      )}
       {pub.photos.length > 0 && (
         <section>
           <h2>Les photos</h2>
