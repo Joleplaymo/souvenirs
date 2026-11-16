@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import Selection from "./Selection.jsx";
+import { Toast } from "./App.jsx";
 
 const STEPS = [["transcription", "Transcription des audios et des vidéos"], ["analyse", "Analyse des photos et des vidéos"],
   ["redaction", "Rédaction du compte rendu"], ["montage", "Montage de la vidéo"], ["album", "Mise en page de l'album"]];
@@ -49,6 +51,7 @@ export function JobProgress({ job }) {
 export default function Generate({ slug, ev, goReview }) {
   const [duration, setDuration] = useState(120);
   const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
   const [job, active, setJob] = useJob(slug);
 
   const start = async () => {
@@ -73,6 +76,7 @@ export default function Generate({ slug, ev, goReview }) {
         {!active && <button className="btn primary big" onClick={start} disabled={ev.raw_purged}>✨ Générer le compte rendu</button>}
         {ev.raw_purged && <p className="muted small">Les fichiers bruts ont été supprimés : seuls les résultats publiés sont conservés.</p>}
       </section>
+      {!ev.raw_purged && <Selection slug={slug} ev={ev} disabled={active} onToast={setToast} />}
       {active && <JobProgress job={job} />}
       {job && job.status === "error" && <div className="card"><p className="error">La génération a échoué : {job.message}</p><p className="muted small">Ce qui était déjà fait (transcriptions) est conservé : relance simplement.</p></div>}
       {job && job.status === "done" && (
@@ -82,6 +86,7 @@ export default function Generate({ slug, ev, goReview }) {
           <button className="btn primary big" onClick={goReview}>Passer à la relecture</button>
         </div>
       )}
+      <Toast msg={toast} onDone={() => setToast("")} />
     </div>
   );
 }

@@ -2,6 +2,8 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 anthropic>=2.8
 faster-whisper>=1.1
+# PyAV 19 a supprimé l'option metadata_errors que faster-whisper passe encore à av.open()
+av>=11,<19
 pillow>=11
 pillow-heif>=0.20
 weasyprint>=63

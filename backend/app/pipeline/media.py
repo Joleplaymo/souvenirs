@@ -79,11 +79,20 @@ def _exif_time(img: Image.Image, tz: str) -> str | None:
     try:
         exif = img.getexif()
         sub = exif.get_ifd(0x8769)
-        raw = sub.get(0x9003) or sub.get(0x9004) or exif.get(0x0132)
+        for tag, off_tag in ((0x9003, 0x9011), (0x9004, 0x9012)):  # prise de vue, numérisation
+            if sub.get(tag):
+                raw, offset = sub.get(tag), sub.get(off_tag)
+                break
+        else:
+            raw, offset = exif.get(0x0132), sub.get(0x9010)
         if not raw:
             return None
         naive = datetime.strptime(str(raw)[:19], "%Y:%m:%d %H:%M:%S")
-        return naive.replace(tzinfo=ZoneInfo(tz)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:  # décalage horaire enregistré par l'appareil (« +01:00 »), sinon fuseau de l'événement
+            when = datetime.strptime(f"{naive:%Y-%m-%dT%H:%M:%S}{str(offset).strip()}", "%Y-%m-%dT%H:%M:%S%z")
+        except (TypeError, ValueError):
+            when = naive.replace(tzinfo=ZoneInfo(tz))
+        return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         return None
 

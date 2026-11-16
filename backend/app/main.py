@@ -84,7 +84,7 @@ def event_public(ev, is_admin=False):
         d = datetime.strptime(ev["published_at"][:10], "%Y-%m-%d") + timedelta(days=config.RAW_RETENTION_DAYS)
         purge_on = d.strftime("%Y-%m-%d")
     return {
-        "slug": ev["slug"], "name": ev["name"], "start_date": ev["start_date"], "end_date": ev["end_date"],
+        "slug": ev["slug"], "name": ev["name"], "tz": ev["tz"], "start_date": ev["start_date"], "end_date": ev["end_date"],
         "type": ev["type"], "type_label": config.EVENT_TYPES.get(ev["type"], ev["type"]),
         "tone": ev["tone"], "tone_label": config.TONES.get(ev["tone"], ev["tone"]),
         "count": n, "day": (today - start).days + 1, "days": (end - start).days + 1,
@@ -514,6 +514,26 @@ def exclude_item(slug: str, item_id: int, body: dict = Body(...), x_admin_token:
     if excluded and not _active_job(ev["id"]):
         _rerender(ev["id"], _remove_from_draft(ev["id"], item_id))
     return {"ok": True}
+
+
+@app.post("/api/events/{slug}/items/{item_id}/time")
+def set_item_time(slug: str, item_id: int, body: dict = Body(...), x_admin_token: str = Header(None)):
+    """Corrige la date et l'heure d'un souvenir, saisies à l'heure locale de l'événement (AAAA-MM-JJTHH:MM)."""
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    it = db.one("SELECT id FROM items WHERE id=? AND event_id=?", item_id, ev["id"])
+    if it is None:
+        err(404, "Introuvable.")
+    try:
+        local = datetime.strptime(str(body.get("local") or "")[:16], "%Y-%m-%dT%H:%M")
+        when = local.replace(tzinfo=ZoneInfo(ev["tz"])).astimezone(timezone.utc)
+    except ValueError:
+        err(400, "Date ou heure invalide.")
+    if when.year < 1990 or when > datetime.now(timezone.utc) + timedelta(minutes=10):
+        err(400, "Cette date est dans le futur ou trop ancienne.")
+    captured = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    db.update("items", "id", item_id, captured_at=captured)
+    return {"ok": True, "captured_at": captured}
 
 
 @app.post("/api/events/{slug}/publish")
