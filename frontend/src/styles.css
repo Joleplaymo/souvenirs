@@ -172,3 +172,19 @@ details summary { cursor: pointer; padding: 10px 0; font-weight: 600; }
 .prose ul { padding-left: 1.2em; }
 .album-cta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; background: var(--accent-soft); border-radius: 18px; padding: 18px 20px; margin: 32px 0; }
 .album-cta h2, .album-cta p { margin: 0; } .album-cta h2 + p { margin-top: 4px; }
+
+/* Vérification des photos et vidéos avant génération */
+.sel-day h3 { margin: 18px 0 8px; font-size: 1rem; }
+.sel-day h3::first-letter { text-transform: uppercase; }
+.sel-grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+.sel-grid li { display: flex; flex-direction: column; align-items: flex-start; }
+.sel-grid li .link { min-height: 32px; padding: 2px 0; }
+.sel-thumb { position: relative; width: 100%; border-radius: 8px; overflow: hidden; }
+.sel-thumb img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+.sel-grid li.off .sel-thumb img { filter: grayscale(1); }
+.sel-dur, .sel-badge { position: absolute; left: 4px; bottom: 4px; background: rgba(0,0,0,.65); color: #fff; font-size: .72rem; border-radius: 6px; padding: 1px 6px; }
+.sel-badge { left: auto; right: 4px; top: 4px; bottom: auto; background: var(--danger); }
+.sel-time { margin-top: 4px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: inherit; font: inherit; font-size: .85rem; cursor: pointer; min-height: 32px; }
+.sel-time:disabled { opacity: .5; cursor: default; }
+.sel-who { margin-top: 2px; }
+.sel-preview { display: block; max-width: 160px; border-radius: 8px; margin: 0 0 12px; }
