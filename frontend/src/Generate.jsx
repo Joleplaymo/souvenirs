@@ -53,12 +53,19 @@ export default function Generate({ slug, ev, reload, goReview }) {
   const [duration, setDuration] = useState(120);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const [wishes, setWishes] = useState("");
   const [job, active, setJob] = useJob(slug);
+  useEffect(() => {  // reprend la durée et les consignes de la génération précédente
+    api(`/events/${slug}/draft`, { slug }).then((d) => {
+      if (d.video_duration) setDuration(d.video_duration);
+      setWishes(d.video_prompt || "");
+    }).catch(() => {});
+  }, [slug]);
 
   const start = async () => {
     setError("");
     try {
-      await api(`/events/${slug}/generate`, { slug, method: "POST", body: { video_duration: duration, parts: ["text", "video", "album"] } });
+      await api(`/events/${slug}/generate`, { slug, method: "POST", body: { video_duration: duration, video_prompt: wishes, parts: ["text", "video", "album"] } });
       setJob({ status: "queued", step: "", progress: 0, message: "" });
     } catch (e) { setError(e.message); }
   };
@@ -71,9 +78,15 @@ export default function Generate({ slug, ev, reload, goReview }) {
         <p className="muted">À partir des {ev.count} souvenirs du groupe : un récit sur le ton « {ev.tone_label.toLowerCase()} », un film avec musique et sous-titres, et un album photo à imprimer.</p>
         <label>Durée du film
           <select value={duration} onChange={(e) => setDuration(+e.target.value)} disabled={active}>
-            {DURATIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            {(DURATIONS.some(([v]) => v === duration) ? DURATIONS : [...DURATIONS, [duration, `${Math.round(duration / 6) / 10} minutes`]])
+              .map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </label>
+        <label>Consignes pour le film <span className="muted small">(facultatif)</span>
+          <textarea rows={4} maxLength={2000} value={wishes} onChange={(e) => setWishes(e.target.value)} disabled={active}
+            placeholder="Ex. : commence par l'arrivée au chalet, garde beaucoup de vidéos de la course, mets en avant Léa et Max, finis sur le coucher de soleil. Pas de sous-titres sur les photos." />
+        </label>
+        <p className="muted small">L'IA suit ces consignes pour choisir les moments, leur ordre, la durée des plans, les cartons et les sous-titres, sans jamais inventer. La musique dépend du ton. Elles sont gardées pour les prochaines générations (et pour « Régénérer » le film en relecture).</p>
         <p className="muted small">Chaque génération est gardée comme version (écran Relecture) : tu peux changer le ton, régénérer et comparer.</p>
         {error && <p className="error">{error}</p>}
         {!active && <button className="btn primary big" onClick={start} disabled={ev.raw_purged}>✨ Générer le compte rendu</button>}

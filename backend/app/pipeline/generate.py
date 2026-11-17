@@ -108,6 +108,9 @@ def generate(job):
     rep = db.report(ev["id"])
     if params.get("video_duration"):
         db.update("reports", "event_id", ev["id"], video_duration=int(params["video_duration"]))
+    if "video_prompt" in params:  # consignes pour le film, gardées pour les générations suivantes
+        db.update("reports", "event_id", ev["id"], video_prompt=str(params["video_prompt"] or "").strip()[:2000])
+        rep = db.report(ev["id"])
     target = int(params.get("video_duration") or rep["video_duration"] or 120)
 
     if use_ai:
@@ -129,7 +132,7 @@ def generate(job):
         by_id = {it["id"]: it for it in items}
         if "video" in parts:
             prog("montage", 0.6, "Choix des meilleurs moments")
-            plan = ai.plan_montage(ev, report_md, items, target)
+            plan = ai.plan_montage(ev, report_md, items, target, rep["video_prompt"] or "")
             segs = video.normalize(plan, by_id, target)
             db.update("reports", "event_id", ev["id"], montage=json.dumps(segs, ensure_ascii=False), video_ready=0)
         if "album" in parts:

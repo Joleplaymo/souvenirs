@@ -38,7 +38,7 @@ def snapshot(event_id: int, label: str = "", origin: str = "manual", suffix: str
     vid = db.insert("versions", event_id=event_id, label=(label or config.TONES.get(tone, tone) + suffix)[:80],
                     tone=tone, type=typ, origin=origin, created_at=db.now(),
                     text_md=rep["text_md"], selection=rep["selection"], montage=rep["montage"], album=rep["album"],
-                    video_duration=rep["video_duration"], ai_mode=rep["ai_mode"],
+                    video_duration=rep["video_duration"], ai_mode=rep["ai_mode"], video_prompt=rep["video_prompt"],
                     has_video=int(has["video.mp4"]), has_album=int(has["album.pdf"]))
     d = vdir(event_id, vid)
     d.mkdir(parents=True, exist_ok=True)
@@ -64,7 +64,7 @@ def restore(event_id: int, vid: int):
             (draft / n).unlink(missing_ok=True)
             ready[n] = 0
     db.update("reports", "event_id", event_id, text_md=v["text_md"], selection=v["selection"], montage=v["montage"],
-              album=v["album"], video_duration=v["video_duration"], ai_mode=v["ai_mode"],
+              album=v["album"], video_duration=v["video_duration"], ai_mode=v["ai_mode"], video_prompt=v["video_prompt"],
               video_ready=ready["video.mp4"], album_ready=ready["album.pdf"], current_version=vid, updated_at=db.now())
     db.update("events", "id", event_id, tone=v["tone"], type=v["type"])
     return True

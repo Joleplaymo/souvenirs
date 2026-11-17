@@ -207,3 +207,9 @@ details summary { cursor: pointer; padding: 10px 0; font-weight: 600; }
 .sheet.wide { max-width: 760px; }
 .sheet video { width: 100%; border-radius: 10px; margin: 8px 0; }
 .v-text { max-height: 45dvh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; margin: 10px 0; }
+
+/* Choix de la version publiée (page Souvenir) */
+.version-pick { margin: 6px 0 18px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.chip { border: 1.5px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 8px 14px; font: inherit; font-size: .92rem; cursor: pointer; min-height: 40px; }
+.chip.on { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
