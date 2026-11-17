@@ -37,7 +37,8 @@ code { background: var(--accent-soft); padding: .05em .35em; border-radius: 4px;
 .card-head h2 { margin: 0; }
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .stack > .card:first-child { margin-top: 0; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.grid2 input { min-width: 0; max-width: 100%; }
 
 label { display: block; font-weight: 600; font-size: .92rem; margin: 12px 0; }
 input, select, textarea { display: block; width: 100%; margin-top: 6px; padding: 12px; font: inherit; color: var(--ink);
@@ -188,3 +189,8 @@ details summary { cursor: pointer; padding: 10px 0; font-weight: 600; }
 .sel-time:disabled { opacity: .5; cursor: default; }
 .sel-who { margin-top: 2px; }
 .sel-preview { display: block; max-width: 160px; border-radius: 8px; margin: 0 0 12px; }
+
+/* Réglages du souvenir */
+.settings-sum { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.settings-sum dt { color: var(--muted); font-size: .9rem; }
+.settings-sum dd { margin: 0; overflow-wrap: anywhere; }
