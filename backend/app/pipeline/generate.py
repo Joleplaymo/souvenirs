@@ -111,6 +111,10 @@ def generate(job):
     target = int(params.get("video_duration") or rep["video_duration"] or 120)
 
     if use_ai:
+        from . import versions
+
+        if versions.dirty(ev["id"]):  # corrections pas encore enregistrées : on les garde avant de tout refaire
+            versions.snapshot(ev["id"], origin="auto", suffix=" · corrigée (avant régénération)")
         _transcribe_all(ev, prog, 0.0, 0.35)
         _describe_all(ev, prog, 0.35, 0.47)
         items = timeline.load_items(ev["id"])
@@ -142,6 +146,10 @@ def generate(job):
             db.update("reports", "event_id", ev["id"], video_ready=0)
     if "album" in parts:
         render_album(ev, rep, prog, 0.93)
+    if use_ai:  # chaque génération devient une version, pour comparer les tons et revenir en arrière
+        from . import versions
+
+        versions.snapshot(ev["id"], origin="generation")
     prog("termine", 1.0, "Terminé")
 
 
@@ -173,4 +181,5 @@ def publish(event_id: int):
     if not ev["published_at"]:
         db.update("events", "id", event_id, published_at=db.now())
     db.update("reports", "event_id", event_id, pub_text_md=rep["text_md"], pub_selection=json.dumps(kept),
+              published_from=rep["current_version"],
               pub_has_video=has["video.mp4"], pub_has_album=has["album.pdf"], pub_version=rep["pub_version"] + 1)

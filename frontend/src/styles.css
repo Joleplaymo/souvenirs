@@ -194,3 +194,16 @@ details summary { cursor: pointer; padding: 10px 0; font-weight: 600; }
 .settings-sum { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
 .settings-sum dt { color: var(--muted); font-size: .9rem; }
 .settings-sum dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Versions du souvenir */
+.versions { list-style: none; padding: 0; margin: 8px 0 0; }
+.versions li { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line); }
+.versions li.current .v-main strong::before { content: "● "; color: var(--accent); }
+.v-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 220px; }
+.v-main strong { overflow-wrap: anywhere; }
+.v-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge { display: inline-block; font-size: .75rem; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--ink); }
+.badge.ok { background: color-mix(in srgb, var(--ok) 22%, transparent); }
+.sheet.wide { max-width: 760px; }
+.sheet video { width: 100%; border-radius: 10px; margin: 8px 0; }
+.v-text { max-height: 45dvh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; margin: 10px 0; }

@@ -74,6 +74,7 @@ export default function Generate({ slug, ev, reload, goReview }) {
             {DURATIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </label>
+        <p className="muted small">Chaque génération est gardée comme version (écran Relecture) : tu peux changer le ton, régénérer et comparer.</p>
         {error && <p className="error">{error}</p>}
         {!active && <button className="btn primary big" onClick={start} disabled={ev.raw_purged}>✨ Générer le compte rendu</button>}
         {ev.raw_purged && <p className="muted small">Les fichiers bruts ont été supprimés : seuls les résultats publiés sont conservés.</p>}
