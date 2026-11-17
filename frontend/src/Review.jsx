@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, mediaUrl, tokens, fmtTime, fmtDur, KIND } from "./api.js";
 import Markdown from "./Markdown.jsx";
+import Versions from "./Versions.jsx";
 import { useJob, JobProgress } from "./Generate.jsx";
 import { Toast } from "./App.jsx";
 
@@ -74,6 +75,11 @@ export default function Review({ slug, ev, reload, goGenerate }) {
       {busy && job && <JobProgress job={job} />}
       {job && job.status === "error" && <div className="card"><p className="error">La dernière génération a échoué : {job.message}</p></div>}
       {d.ai_mode === "local" && <div className="card warn">Aucune clé API Claude n'est configurée : ce brouillon a été assemblé sans IA (simple mise bout à bout). Ajoute <code>ANTHROPIC_API_KEY</code> puis régénère.</div>}
+
+      <Versions slug={slug} busy={busy} onToast={setToast}
+        refresh={`${stamp}|${saved}|${d.pub_version}|${d.selection.join(",")}|${d.segments.length}`}
+        beforeSave={() => (saved ? null : save())}
+        onRestored={async () => { await load(false); setStamp(Date.now()); reload(); }} />
 
       <div className="review-grid">
         <section className="card">

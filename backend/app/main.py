@@ -17,6 +17,7 @@ from starlette.requests import ClientDisconnect
 from . import config, db
 from .pipeline import album as album_mod
 from .pipeline import generate, media
+from .pipeline import versions as versions_mod
 
 app = FastAPI(title="Souvenirs", docs_url=None, redoc_url=None, openapi_url=None)
 db.init()
@@ -554,6 +555,100 @@ def set_item_time(slug: str, item_id: int, body: dict = Body(...), x_admin_token
     return {"ok": True, "captured_at": captured}
 
 
+def _version_public(v, rep):
+    return {"id": v["id"], "label": v["label"], "tone": v["tone"], "tone_label": config.TONES.get(v["tone"], v["tone"]),
+            "type_label": config.EVENT_TYPES.get(v["type"], v["type"]), "origin": v["origin"],
+            "created_at": v["created_at"], "has_video": bool(v["has_video"]), "has_album": bool(v["has_album"]),
+            "current": v["id"] == rep["current_version"], "published": v["id"] == rep["published_from"]}
+
+
+@app.get("/api/events/{slug}/versions")
+def list_versions(slug: str, x_admin_token: str = Header(None)):
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    rep = db.report(ev["id"])
+    rows = db.q("SELECT id, label, tone, type, origin, created_at, has_video, has_album FROM versions "
+                "WHERE event_id=? ORDER BY id DESC", ev["id"])
+    return {"versions": [_version_public(v, rep) for v in rows], "dirty": versions_mod.dirty(ev["id"]),
+            "has_draft": bool((rep["text_md"] or "").strip())}
+
+
+def _version(ev, vid):
+    v = db.one("SELECT * FROM versions WHERE id=? AND event_id=?", vid, ev["id"])
+    if v is None:
+        err(404, "Version introuvable.")
+    return v
+
+
+@app.get("/api/events/{slug}/versions/{vid}")
+def read_version(slug: str, vid: int, x_admin_token: str = Header(None)):
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    v = _version(ev, vid)
+    return {**_version_public(v, db.report(ev["id"])), "text_md": v["text_md"]}
+
+
+@app.get("/api/events/{slug}/versions/{vid}/{name}")
+def version_file(slug: str, vid: int, name: str, k: str = ""):
+    ev = get_event(slug)
+    require_admin(ev, k)
+    v = _version(ev, vid)
+    if name not in versions_mod.FILES or not (versions_mod.vdir(ev["id"], vid) / name).exists():
+        err(404, "Introuvable.")
+    slug_name = re.sub(r"[^A-Za-z0-9\-]", "-", unicodedata.normalize("NFKD", f"{ev['name']}-{v['label']}")
+                       .encode("ascii", "ignore").decode())
+    slug_name = re.sub(r"-{2,}", "-", slug_name).strip("-") or "souvenir"
+    kind = "film" if name.endswith("mp4") else "album"
+    return FileResponse(versions_mod.vdir(ev["id"], vid) / name,
+                        media_type="video/mp4" if name.endswith("mp4") else "application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{slug_name}-{kind}.{name.rsplit(".", 1)[1]}"',
+                                 "Cache-Control": "private, no-cache"})
+
+
+@app.post("/api/events/{slug}/versions")
+def save_version(slug: str, body: dict = Body(default={}), x_admin_token: str = Header(None)):
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    if _active_job(ev["id"]):
+        err(409, "Attends la fin de la génération en cours.")
+    vid = versions_mod.snapshot(ev["id"], str(body.get("label") or "").strip())
+    if vid is None:
+        err(400, "Le brouillon est vide : génère d'abord le compte rendu.")
+    return {"ok": True, "id": vid}
+
+
+@app.put("/api/events/{slug}/versions/{vid}")
+def rename_version(slug: str, vid: int, body: dict = Body(...), x_admin_token: str = Header(None)):
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    _version(ev, vid)
+    label = re.sub(r"\s+", " ", str(body.get("label") or "")).strip()[:80]
+    if not label:
+        err(400, "Donne un nom à la version.")
+    db.update("versions", "id", vid, label=label)
+    return {"ok": True}
+
+
+@app.post("/api/events/{slug}/versions/{vid}/restore")
+def restore_version(slug: str, vid: int, x_admin_token: str = Header(None)):
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    if _active_job(ev["id"]):
+        err(409, "Attends la fin de la génération en cours.")
+    _version(ev, vid)
+    versions_mod.restore(ev["id"], vid)
+    return {"ok": True}
+
+
+@app.delete("/api/events/{slug}/versions/{vid}")
+def delete_version(slug: str, vid: int, x_admin_token: str = Header(None)):
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    _version(ev, vid)
+    versions_mod.delete(ev["id"], vid)
+    return {"ok": True}
+
+
 @app.post("/api/events/{slug}/publish")
 def publish(slug: str, x_admin_token: str = Header(None)):
     ev = get_event(slug)
@@ -562,6 +657,8 @@ def publish(slug: str, x_admin_token: str = Header(None)):
         err(409, "Attends la fin de la génération en cours avant de publier.")
     if not db.report(ev["id"])["text_md"].strip():
         err(400, "Le compte rendu est vide : génère-le d'abord.")
+    if versions_mod.dirty(ev["id"]):  # ce qui est publié est toujours une version enregistrée
+        versions_mod.snapshot(ev["id"], origin="publish", suffix=" · publiée")
     generate.publish(ev["id"])
     return {"ok": True}
 
