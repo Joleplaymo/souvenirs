@@ -427,7 +427,8 @@ def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Heade
         err(400, "Rien à générer.")
     if db.one("SELECT COUNT(*) c FROM items WHERE event_id=? AND status='processing'", ev["id"])["c"]:
         err(409, "Des fichiers sont encore en cours de préparation, réessaie dans un instant.")
-    jid = db.enqueue(ev["id"], "generate", parts=parts, video_duration=dur, ai=True)
+    extra = {"video_prompt": str(body["video_prompt"] or "")[:2000]} if "video_prompt" in body else {}
+    jid = db.enqueue(ev["id"], "generate", parts=parts, video_duration=dur, ai=True, **extra)
     return {"job_id": jid}
 
 
@@ -460,7 +461,8 @@ def get_draft(slug: str, x_admin_token: str = Header(None)):
         "items": [item_public(r, admin=True) for r in rows],
         "segments": segs, "video_ready": bool(rep["video_ready"]), "album_ready": bool(rep["album_ready"]),
         "album_pages": len(alb.get("pages", [])) + 2 if alb.get("pages") else 0,
-        "video_duration": rep["video_duration"], "ai_mode": rep["ai_mode"], "updated_at": rep["updated_at"],
+        "video_duration": rep["video_duration"], "video_prompt": rep["video_prompt"] or "",
+        "ai_mode": rep["ai_mode"], "updated_at": rep["updated_at"],
         "busy": bool(active), "job": _job_public(last),
         "published": bool(ev["published_at"]), "pub_version": rep["pub_version"],
         "dirty": bool(ev["published_at"]) and rep["text_md"] != rep["pub_text_md"],
@@ -559,7 +561,8 @@ def _version_public(v, rep):
     return {"id": v["id"], "label": v["label"], "tone": v["tone"], "tone_label": config.TONES.get(v["tone"], v["tone"]),
             "type_label": config.EVENT_TYPES.get(v["type"], v["type"]), "origin": v["origin"],
             "created_at": v["created_at"], "has_video": bool(v["has_video"]), "has_album": bool(v["has_album"]),
-            "current": v["id"] == rep["current_version"], "published": v["id"] == rep["published_from"]}
+            "current": v["id"] == rep["current_version"], "published": v["id"] == rep["published_from"],
+            "shared": bool(v["shared"])}
 
 
 @app.get("/api/events/{slug}/versions")
@@ -567,7 +570,7 @@ def list_versions(slug: str, x_admin_token: str = Header(None)):
     ev = get_event(slug)
     require_admin(ev, x_admin_token)
     rep = db.report(ev["id"])
-    rows = db.q("SELECT id, label, tone, type, origin, created_at, has_video, has_album FROM versions "
+    rows = db.q("SELECT id, label, tone, type, origin, created_at, has_video, has_album, shared FROM versions "
                 "WHERE event_id=? ORDER BY id DESC", ev["id"])
     return {"versions": [_version_public(v, rep) for v in rows], "dirty": versions_mod.dirty(ev["id"]),
             "has_draft": bool((rep["text_md"] or "").strip())}
@@ -585,7 +588,7 @@ def read_version(slug: str, vid: int, x_admin_token: str = Header(None)):
     ev = get_event(slug)
     require_admin(ev, x_admin_token)
     v = _version(ev, vid)
-    return {**_version_public(v, db.report(ev["id"])), "text_md": v["text_md"]}
+    return {**_version_public(v, db.report(ev["id"])), "text_md": v["text_md"], "video_prompt": v["video_prompt"] or ""}
 
 
 @app.get("/api/events/{slug}/versions/{vid}/{name}")
@@ -626,6 +629,16 @@ def rename_version(slug: str, vid: int, body: dict = Body(...), x_admin_token: s
     if not label:
         err(400, "Donne un nom à la version.")
     db.update("versions", "id", vid, label=label)
+    return {"ok": True}
+
+
+@app.post("/api/events/{slug}/versions/{vid}/share")
+def share_version(slug: str, vid: int, body: dict = Body(...), x_admin_token: str = Header(None)):
+    """Propose (ou retire) une version au groupe, en plus de la version publiée."""
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    _version(ev, vid)
+    db.update("versions", "id", vid, shared=1 if body.get("shared") else 0)
     return {"ok": True}
 
 
@@ -708,9 +721,52 @@ def published(slug: str):
     if not ev["published_at"]:
         return {"published": False}
     rep = db.report(ev["id"])
+    main_v = db.one("SELECT label, tone FROM versions WHERE id=?", rep["published_from"]) if rep["published_from"] else None
+    options = [{"id": 0, "label": main_v["label"] if main_v else "Version principale",
+                "tone_label": config.TONES.get(main_v["tone"] if main_v else ev["tone"], ""), "main": True}]
+    for v in db.q("SELECT id, label, tone FROM versions WHERE event_id=? AND shared=1 AND id IS NOT ? ORDER BY id",
+                  ev["id"], rep["published_from"]):
+        options.append({"id": v["id"], "label": v["label"], "tone_label": config.TONES.get(v["tone"], v["tone"]), "main": False})
     return {"published": True, "text_md": rep["pub_text_md"], "photos": db.jl(rep["pub_selection"], []),
             "has_video": bool(rep["pub_has_video"]), "has_album": bool(rep["pub_has_album"]),
-            "version": rep["pub_version"], "published_at": ev["published_at"]}
+            "version": rep["pub_version"], "published_at": ev["published_at"], "versions": options}
+
+
+def _shared_version(slug, vid):
+    ev = get_event(slug)
+    if not ev["published_at"]:
+        err(404, "Pas encore publié.")
+    v = db.one("SELECT * FROM versions WHERE id=? AND event_id=? AND shared=1", vid, ev["id"])
+    if v is None:
+        err(404, "Cette version n'est pas proposée au groupe.")
+    return ev, v
+
+
+@app.get("/api/events/{slug}/published/versions/{vid}")
+def published_version(slug: str, vid: int):
+    """Une autre version proposée au groupe : son texte, ses photos (encore présentes) et ses fichiers."""
+    ev, v = _shared_version(slug, vid)
+    ids = [i for i in db.jl(v["selection"], []) if isinstance(i, int)]
+    ok = {r["id"] for r in db.q(f"SELECT id FROM items WHERE event_id=? AND kind='photo' AND status='ready' AND excluded=0 "
+                                f"AND id IN ({','.join('?' * len(ids)) or 'NULL'})", ev["id"], *ids)} if ids else set()
+    d = versions_mod.vdir(ev["id"], vid)
+    return {"id": v["id"], "label": v["label"], "tone_label": config.TONES.get(v["tone"], v["tone"]),
+            "text_md": v["text_md"], "photos": [i for i in ids if i in ok and media.derived(ev["id"], i, "d").exists()],
+            "has_video": (d / "video.mp4").exists(), "has_album": (d / "album.pdf").exists()}
+
+
+@app.get("/api/events/{slug}/published/versions/{vid}/{name}")
+def published_version_file(slug: str, vid: int, name: str):
+    ev, v = _shared_version(slug, vid)
+    path = versions_mod.vdir(ev["id"], vid) / name
+    if name not in versions_mod.FILES or not path.exists():
+        err(404, "Introuvable.")
+    plain = unicodedata.normalize("NFKD", f"{ev['name']}-{v['label']}").encode("ascii", "ignore").decode()
+    base = re.sub(r"-{2,}", "-", re.sub(r"[^A-Za-z0-9\-]", "-", plain)).strip("-") or "souvenir"
+    kind = "film" if name.endswith("mp4") else "album"
+    return FileResponse(path, media_type="video/mp4" if name.endswith("mp4") else "application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{base}-{kind}.{name.rsplit(".", 1)[1]}"',
+                                 "Cache-Control": "private, no-cache"})
 
 
 @app.get("/api/events/{slug}/download-all")

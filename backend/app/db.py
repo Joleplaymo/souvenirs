@@ -38,13 +38,14 @@ CREATE TABLE IF NOT EXISTS reports (
   montage TEXT, album TEXT, video_ready INTEGER DEFAULT 0, album_ready INTEGER DEFAULT 0,
   video_duration INTEGER DEFAULT 120, ai_mode TEXT, updated_at TEXT,
   pub_text_md TEXT, pub_selection TEXT, pub_has_video INTEGER DEFAULT 0, pub_has_album INTEGER DEFAULT 0,
-  pub_version INTEGER DEFAULT 0, current_version INTEGER, published_from INTEGER
+  pub_version INTEGER DEFAULT 0, current_version INTEGER, published_from INTEGER, video_prompt TEXT
 );
 CREATE TABLE IF NOT EXISTS versions (
   id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, label TEXT NOT NULL, tone TEXT NOT NULL, type TEXT NOT NULL,
   origin TEXT DEFAULT 'manual', created_at TEXT NOT NULL,
   text_md TEXT DEFAULT '', selection TEXT DEFAULT '[]', montage TEXT, album TEXT,
-  video_duration INTEGER, ai_mode TEXT, has_video INTEGER DEFAULT 0, has_album INTEGER DEFAULT 0
+  video_duration INTEGER, ai_mode TEXT, has_video INTEGER DEFAULT 0, has_album INTEGER DEFAULT 0,
+  shared INTEGER DEFAULT 0, video_prompt TEXT
 );
 CREATE INDEX IF NOT EXISTS versions_event ON versions(event_id, id);
 CREATE TABLE IF NOT EXISTS jobs (
@@ -75,6 +76,9 @@ def conn() -> sqlite3.Connection:
 MIGRATIONS = [
     ("reports", "current_version", "INTEGER"),
     ("reports", "published_from", "INTEGER"),
+    ("reports", "video_prompt", "TEXT"),
+    ("versions", "shared", "INTEGER DEFAULT 0"),
+    ("versions", "video_prompt", "TEXT"),
 ]
 
 

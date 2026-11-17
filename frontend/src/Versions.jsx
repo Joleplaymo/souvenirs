@@ -9,7 +9,7 @@ function when(iso) {
 }
 const ORIGIN = { generation: "générée", manual: "enregistrée", auto: "sauvegarde auto", publish: "à la publication" };
 
-export default function Versions({ slug, busy, refresh, beforeSave, onRestored, onToast }) {
+export default function Versions({ slug, busy, published, refresh, beforeSave, onRestored, onToast }) {
   const [data, setData] = useState(null);
   const [view, setView] = useState(null); // version ouverte en aperçu (avec son texte)
   const [working, setWorking] = useState(false);
@@ -47,6 +47,8 @@ export default function Versions({ slug, busy, refresh, beforeSave, onRestored, 
     if (!confirm(`Supprimer la version « ${v.label} » ? Son texte, son film et son album seront effacés.${v.published ? "\n\nCe que voit le groupe ne change pas." : ""}`)) return;
     run(() => api(`/events/${slug}/versions/${v.id}`, { slug, method: "DELETE" }), "Version supprimée");
   };
+  const share = (v) => run(() => api(`/events/${slug}/versions/${v.id}/share`, { slug, method: "POST", body: { shared: !v.shared } }),
+    v.shared ? "Version retirée du choix du groupe" : "Version proposée au groupe");
   const open = (v) => run(async () => setView(await api(`/events/${slug}/versions/${v.id}`, { slug })));
 
   if (!data) return null;
@@ -62,6 +64,7 @@ export default function Versions({ slug, busy, refresh, beforeSave, onRestored, 
       <p className="muted small">
         Chaque génération est gardée ici. Pour essayer un autre ton : change-le dans les réglages (écran Générer), régénère, puis compare.
         « Reprendre » remet une version dans le brouillon, avec son ton ; c'est le brouillon qui est publié.
+        {published ? " « Proposer au groupe » ajoute une version au choix offert sur la page Souvenir, à côté de la version publiée." : ""}
         {data.dirty ? " Le brouillon actuel a des modifications qui ne sont dans aucune version : elles seront gardées automatiquement avant une nouvelle génération ou une publication." : ""}
       </p>
       {data.versions.length === 0 && <p className="muted">Aucune version pour l'instant.</p>}
@@ -76,12 +79,14 @@ export default function Versions({ slug, busy, refresh, beforeSave, onRestored, 
               </span>
               <span className="v-badges">
                 {v.current && <span className="badge">{data.dirty ? "Brouillon (modifié depuis)" : "Dans le brouillon"}</span>}
-                {v.published && <span className="badge ok">Publiée</span>}
+                {v.published && <span className="badge ok">Publiée{data.versions.some((x) => x.shared && !x.published) ? " (par défaut)" : ""}</span>}
+                {v.shared && !v.published && <span className="badge ok">Proposée au groupe</span>}
               </span>
             </div>
             <div className="row">
               <button className="btn" onClick={() => open(v)} disabled={working}>Aperçu</button>
               {!(v.current && !data.dirty) && <button className="btn" onClick={() => restore(v)} disabled={off}>Reprendre</button>}
+              {published && !v.published && <button className="link" onClick={() => share(v)} disabled={working}>{v.shared ? "Retirer du choix du groupe" : "Proposer au groupe"}</button>}
               <button className="link" onClick={() => rename(v)} disabled={working}>Renommer</button>
               <button className="link danger" onClick={() => remove(v)} disabled={off}>Supprimer</button>
             </div>
@@ -96,6 +101,7 @@ export default function Versions({ slug, busy, refresh, beforeSave, onRestored, 
               <button className="btn" onClick={() => setView(null)}>Fermer</button>
             </div>
             <p className="muted small">{view.tone_label} · {view.type_label} · {when(view.created_at)}</p>
+            {view.video_prompt && <p className="muted small">Consignes du film : « {view.video_prompt} »</p>}
             {view.has_video && <video controls playsInline preload="metadata" src={file(view, "video.mp4") + "#t=1.2"} />}
             {view.has_album && <p><a className="btn" href={file(view, "album.pdf")} target="_blank" rel="noreferrer">📕 Ouvrir l'album (PDF)</a></p>}
             <div className="v-text"><Markdown text={view.text_md} /></div>

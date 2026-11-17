@@ -76,7 +76,7 @@ export default function Review({ slug, ev, reload, goGenerate }) {
       {job && job.status === "error" && <div className="card"><p className="error">La dernière génération a échoué : {job.message}</p></div>}
       {d.ai_mode === "local" && <div className="card warn">Aucune clé API Claude n'est configurée : ce brouillon a été assemblé sans IA (simple mise bout à bout). Ajoute <code>ANTHROPIC_API_KEY</code> puis régénère.</div>}
 
-      <Versions slug={slug} busy={busy} onToast={setToast}
+      <Versions slug={slug} busy={busy} onToast={setToast} published={ev.published}
         refresh={`${stamp}|${saved}|${d.pub_version}|${d.selection.join(",")}|${d.segments.length}`}
         beforeSave={() => (saved ? null : save())}
         onRestored={async () => { await load(false); setStamp(Date.now()); reload(); }} />
@@ -103,6 +103,7 @@ export default function Review({ slug, ev, reload, goGenerate }) {
               <h2>Le film</h2>
               <button className="btn" onClick={() => regen("video", "Film")} disabled={busy}>Régénérer</button>
             </div>
+            {d.video_prompt && <p className="muted small">Consignes : « {d.video_prompt.length > 160 ? d.video_prompt.slice(0, 160) + "…" : d.video_prompt} » <button className="link" onClick={goGenerate}>Modifier</button></p>}
             {d.video_ready ? <video key={stamp} controls playsInline preload="metadata" src={out("video.mp4") + "#t=1.2"} /> : <p className="muted">{busy ? "Montage en cours…" : "Pas encore de film."}</p>}
             {d.segments.length > 0 && (
               <details>

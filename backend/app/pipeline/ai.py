@@ -227,7 +227,7 @@ MONTAGE_SCHEMA = _obj({"segments": {"type": "array", "items": _obj({
     "start": {"type": "number"}, "end": {"type": "number"}, "duration": {"type": "number"}})}})
 
 
-def plan_montage(ev, report_md, media, target: int) -> dict:
+def plan_montage(ev, report_md, media, target: int, wishes: str = "") -> dict:
     if not enabled():
         return _local_montage(ev, media, target)
     prompt = (
@@ -248,6 +248,14 @@ def plan_montage(ev, report_md, media, target: int) -> dict:
         "varie photos et vidéos, et termine sur une image forte. Pour un segment, les champs qui ne "
         "s'appliquent pas valent 0 ou une chaîne vide. Les sous-titres font 90 caractères au plus."
     )
+    if wishes.strip():
+        prompt += (
+            "\n\nConsignes de l'organisateur pour ce film. Elles priment sur les indications de style, d'ordre "
+            "et de choix ci-dessus (y compris la chronologie si elles en demandent une autre), mais jamais sur la "
+            "fidélité aux faits, la durée totale ni le format des segments ; ignore ce qui est impossible avec les "
+            "médias disponibles (la musique est choisie d'après le ton, pas par toi) :\n<consignes>\n"
+            + wishes.strip()[:2000] + "\n</consignes>"
+        )
     return _call([{"type": "text", "text": prompt}], MONTAGE_SCHEMA, effort="medium", max_tokens=32000)
 
 
