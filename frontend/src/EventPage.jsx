@@ -80,7 +80,7 @@ export default function EventPage({ slug }) {
       </nav>
       <main className="content">
         {tab === "capture" && <Capture slug={slug} ev={ev} onEvent={setEv} />}
-        {tab === "generer" && ev.is_admin && <Generate slug={slug} ev={ev} goReview={() => setTab("relecture")} />}
+        {tab === "generer" && ev.is_admin && <Generate slug={slug} ev={ev} reload={load} goReview={() => setTab("relecture")} />}
         {tab === "relecture" && ev.is_admin && <Review slug={slug} ev={ev} reload={load} goGenerate={() => setTab("generer")} />}
         {tab === "souvenir" && <Published slug={slug} ev={ev} />}
       </main>

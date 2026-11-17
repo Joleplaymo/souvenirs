@@ -113,23 +113,41 @@ def get_config():
     return {"types": config.EVENT_TYPES, "tones": config.TONES, "max_upload_mb": config.MAX_UPLOAD_MB}
 
 
-@app.post("/api/events")
-def create_event(body: dict = Body(...), x_admin_code: str = Header(None)):
-    require_code(x_admin_code)
-    name = (body.get("name") or "").strip()[:120]
+def _settings(body: dict) -> dict:
+    """Valide les réglages d'un événement (création ou modification)."""
+    name = re.sub(r"\s+", " ", str(body.get("name") or "")).strip()[:120]
+    tz = str(body.get("tz") or config.DEFAULT_TZ)
     try:
         start, end = date.fromisoformat(body["start_date"]), date.fromisoformat(body["end_date"])
-        ZoneInfo(body.get("tz") or config.DEFAULT_TZ)
     except Exception:
         err(400, "Dates invalides.")
+    try:
+        ZoneInfo(tz)
+    except Exception:
+        err(400, "Fuseau horaire inconnu.")
     if not name or end < start:
         err(400, "Donne un nom, et une date de fin après la date de début.")
     if body.get("type") not in config.EVENT_TYPES or body.get("tone") not in config.TONES:
         err(400, "Type ou ton inconnu.")
+    return {"name": name, "start_date": str(start), "end_date": str(end), "type": body["type"], "tone": body["tone"], "tz": tz}
+
+
+@app.post("/api/events")
+def create_event(body: dict = Body(...), x_admin_code: str = Header(None)):
+    require_code(x_admin_code)
+    vals = _settings(body)
     slug, admin = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
-    db.insert("events", slug=slug, admin_token=admin, name=name, start_date=str(start), end_date=str(end),
-              type=body["type"], tone=body["tone"], tz=body.get("tz") or config.DEFAULT_TZ, created_at=db.now())
+    db.insert("events", slug=slug, admin_token=admin, created_at=db.now(), **vals)
     return {"slug": slug, "admin_token": admin}
+
+
+@app.put("/api/events/{slug}/settings")
+def update_settings(slug: str, body: dict = Body(...), x_admin_token: str = Header(None)):
+    """Modifie le nom, les dates, le type, le ton ou le fuseau. Pris en compte à la prochaine génération."""
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    db.update("events", "id", ev["id"], **_settings(body))
+    return event_public(get_event(slug), True)
 
 
 @app.get("/api/admin/events")

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import Selection from "./Selection.jsx";
+import Settings from "./Settings.jsx";
 import { Toast } from "./App.jsx";
 
 const STEPS = [["transcription", "Transcription des audios et des vidéos"], ["analyse", "Analyse des photos et des vidéos"],
@@ -48,7 +49,7 @@ export function JobProgress({ job }) {
   );
 }
 
-export default function Generate({ slug, ev, goReview }) {
+export default function Generate({ slug, ev, reload, goReview }) {
   const [duration, setDuration] = useState(120);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
@@ -64,6 +65,7 @@ export default function Generate({ slug, ev, goReview }) {
 
   return (
     <div className="narrow-col">
+      <Settings slug={slug} ev={ev} disabled={active} onSaved={reload} onToast={setToast} />
       <section className="card">
         <h2>Générer le compte rendu</h2>
         <p className="muted">À partir des {ev.count} souvenirs du groupe : un récit sur le ton « {ev.tone_label.toLowerCase()} », un film avec musique et sous-titres, et un album photo à imprimer.</p>
