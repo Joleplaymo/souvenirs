@@ -95,11 +95,20 @@ ENC = ["-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "
 SILENCE = ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
 
 
+FONT_DIR = Path(__file__).resolve().parent.parent / "fonts"  # polices livrées avec l'appli (Caveat, licence OFL)
+
+
 @lru_cache
 def font_path(kind: str) -> str:
+    if kind == "hand":  # écriture manuscrite ; repli : le serif des cartons d'avant
+        for name in ("Caveat-Bold.ttf", "Caveat-Variable.ttf"):
+            if (FONT_DIR / name).is_file():
+                return str(FONT_DIR / name)
+        return font_path("serif")
     wanted = {
         "serif": ["PlayfairDisplay-Bold", "Playfair*Bold", "DejaVuSerif-Bold", "LiberationSerif-Bold"],
         "sans": ["Lato-Bold", "Lato-Semibold", "DejaVuSans-Bold", "LiberationSans-Bold"],
+        "sans-light": ["Lato-Light", "Lato-Regular", "LiberationSans-Regular", "DejaVuSans-ExtraLight"],
     }[kind]
     roots = [Path("/usr/share/fonts"), Path("/usr/local/share/fonts")]
     for pat in wanted:
@@ -111,7 +120,13 @@ def font_path(kind: str) -> str:
 
 
 def _font(kind, size):
-    return ImageFont.truetype(font_path(kind), size)
+    f = ImageFont.truetype(font_path(kind), size)
+    if kind == "hand" and "Variable" in font_path(kind):
+        try:
+            f.set_variation_by_axes([700])  # police variable Caveat : graisse Bold
+        except Exception:
+            pass
+    return f
 
 
 def _wrap_px(d, text: str, f, maxw: float) -> list[str]:
@@ -127,22 +142,73 @@ def _wrap_px(d, text: str, f, maxw: float) -> list[str]:
     return lines + ([cur] if cur else [])
 
 
-def title_card(text: str, out: Path, frame: Frame = DEFAULT_FRAME):
+TITLE_STYLES = ("carnet", "sobre", "pop")
+POP_COLORS = ("#ff3d71", "#ffb400", "#00b8d9", "#7a42f4", "#22c55e")  # palette vive, choisie selon l'index du carton
+POP_TILT = -3  # degrés
+
+
+def _card_style(style) -> str:
+    """Style de carton effectif : « aucun » (ou inconnu) ne laisse que les cartons à garder (crédit) → sobre."""
+    return style if style in TITLE_STYLES else "sobre"
+
+
+def _fit_lines(d, text, kind, k, ok, maxw):
+    """Lignes et police : on rétrécit la taille (96/76/56 selon la longueur) jusqu'à ce que `ok(lines, size, font)` passe."""
+    paras = [ln for par in text.strip().split("\n") for ln in (textwrap.wrap(par, 26) or [""])] or [""]
+    size = 96 if len(paras) <= 2 else 76 if len(paras) <= 6 else 56
+    while True:
+        f = _font(kind, max(12, int(size * k)))
+        lines = [sub for ln in paras for sub in (_wrap_px(d, ln, f, maxw) or [""])]
+        if size <= 24 or ok(lines, size, f):
+            return f, lines, size
+        size -= 4
+
+
+def title_card(text: str, out: Path, frame: Frame = DEFAULT_FRAME, style: str = "carnet", index: int = 0):
     W, H, k = frame.w, frame.h, frame.k
+    style = _card_style(style)
+    maxw, maxh = W * 0.84, H * 0.7
+    if style == "pop":
+        img = Image.new("RGB", (W, H), POP_COLORS[index % len(POP_COLORS)])
+        d = ImageDraw.Draw(img)
+        # texte posé sur un calque incliné de −3° ; on rétrécit jusqu'à ce que le calque incliné tienne dans les marges
+        for shrink in (1.0, 0.92, 0.85, 0.78, 0.7, 0.6, 0.5, 0.4):
+            kk = k * 1.1 * shrink
+            f, lines, size = _fit_lines(d, text, "sans", kk, lambda ls, sz, fo: (
+                len(ls) * int(sz * kk * 1.2) <= maxh * 0.9
+                and all(d.textlength(ln, font=fo) <= maxw * 0.9 for ln in ls)), maxw * 0.9)
+            lh = int(size * kk * 1.2)
+            tw = int(max(d.textlength(ln, font=f) for ln in lines)) + 8
+            layer = Image.new("RGBA", (tw, lh * len(lines) + lh // 2), (0, 0, 0, 0))
+            ld = ImageDraw.Draw(layer)
+            for i, ln in enumerate(lines):
+                ld.text(((tw - ld.textlength(ln, font=f)) / 2, i * lh), ln, font=f, fill="#ffffff")
+            layer = layer.rotate(POP_TILT, resample=Image.BICUBIC, expand=True)
+            if layer.width <= W * 0.92 and layer.height <= H * 0.8:
+                break
+        img.paste(layer, ((W - layer.width) // 2, (H - layer.height) // 2), layer)
+        img.save(out)
+        return
+    if style == "sobre":
+        img = Image.new("RGB", (W, H), "#000000")
+        d = ImageDraw.Draw(img)
+        kk = k * 0.9
+        f, lines, size = _fit_lines(d, text, "sans-light", kk, lambda ls, sz, fo: (
+            len(ls) * int(sz * kk * 1.3) <= maxh and all(d.textlength(ln, font=fo) <= maxw for ln in ls)), maxw)
+        lh = int(size * kk * 1.3)
+        y = (H - len(lines) * lh) // 2
+        for ln in lines:
+            d.text(((W - d.textlength(ln, font=f)) / 2, y), ln, font=f, fill="#ffffff")
+            y += lh
+        img.save(out)
+        return
     img = Image.new("RGB", (W, H), "#2a1c14")
     d = ImageDraw.Draw(img)
     for y in range(H):  # léger dégradé chaud
         c = y / H
         d.line([(0, y), (W, y)], fill=(int(58 - 26 * c), int(38 - 16 * c), int(26 - 10 * c)))
-    paras = [ln for par in text.strip().split("\n") for ln in (textwrap.wrap(par, 26) or [""])] or [""]
-    size = 96 if len(paras) <= 2 else 76 if len(paras) <= 6 else 56
-    maxw, maxh = W * 0.84, H * 0.7
-    while True:  # on rétrécit jusqu'à ce que le texte tienne dans le cadre
-        f = _font("serif", max(12, int(size * k)))
-        lines = [sub for ln in paras for sub in (_wrap_px(d, ln, f, maxw) or [""])]
-        if (len(lines) * int(size * k * 1.25) <= maxh and all(d.textlength(ln, font=f) <= maxw for ln in lines))                 or size <= 24:
-            break
-        size -= 4
+    f, lines, size = _fit_lines(d, text, "hand", k, lambda ls, sz, fo: (
+        len(ls) * int(sz * k * 1.25) <= maxh and all(d.textlength(ln, font=fo) <= maxw for ln in ls)), maxw)
     lh = int(size * k * 1.25)
     y = (H - len(lines) * lh) // 2
     bar = int(70 * k)
@@ -258,6 +324,8 @@ def normalize(plan: dict, items: dict, target: int, style: Style | None = None) 
         t = s.get("type")
         text = (s.get("text") or "").strip()
         if t == "title" and text:
+            if style is not None and style.title_style == "aucun":
+                continue  # pas de carton de séquence (le crédit musical, ajouté par render, reste)
             segs.append({"type": "title", "item_id": 0, "text": text[:80], "effect": "none",
                          "duration": asked(s, 2.5, 2.0, 3.5)})
             continue
@@ -311,7 +379,8 @@ def _punch(dur: float, var: str) -> str:
     return f"(1+{zmax - 1}*clip(({var}-{t0:.3f})/{d},0,1))"
 
 
-def _render_segment(seg, item, tmp: Path, idx: int, frame: Frame = DEFAULT_FRAME, style=None) -> Path:
+def _render_segment(seg, item, tmp: Path, idx: int, frame: Frame = DEFAULT_FRAME, style=None,
+                    card_style=None) -> Path:
     W, H = frame.w, frame.h
     out = tmp / f"seg{idx:04d}.mp4"
     dur = seg["duration"]
@@ -324,7 +393,8 @@ def _render_segment(seg, item, tmp: Path, idx: int, frame: Frame = DEFAULT_FRAME
         subtitle_png(seg["text"], sub, frame)
     if seg["type"] == "title":
         card = tmp / f"card{idx:04d}.png"
-        title_card(seg["text"], card, frame)
+        title_card(seg["text"], card, frame,
+                   _card_style(card_style or (style.title_style if style else "carnet")), idx)
         media.sh(["ffmpeg", "-y", "-loop", "1", "-t", f"{dur}", "-i", str(card), *SILENCE,
                   "-vf", fade, "-t", f"{dur}", *ENC, str(out)])
     elif seg["type"] == "photo":
@@ -424,6 +494,7 @@ def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, fra
     tracks = {"main": Path | None, "final": Path | None, "credits": [str]}. Retourne la durée finale.
     `style` règle les fondus (rythme) ; les effets sont portés par chaque segment (normalize)."""
     frame = frame or DEFAULT_FRAME
+    title_style = style.title_style if style else "carnet"
     if not segs:
         raise RuntimeError("Le plan de montage est vide : il faut au moins une photo ou une vidéo.")
     tmp = out.parent / "tmp_video"
@@ -450,13 +521,15 @@ def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, fra
             tracks = {**tracks, "final": None, "credits": tracks.get("main_credits", tracks.get("credits"))}
         credits = credit_lines(tracks.get("credits"))
         if credits:
-            files.append(_render_segment(credit_segment(credits), None, tmp, len(segs), frame))
+            files.append(_render_segment(credit_segment(credits), None, tmp, len(segs), frame,
+                                         card_style=title_style))
         joined = tmp / "joined.mp4"
         _concat(files, tmp / "list.txt", joined)
         base = out.parent / BASE
         joined.replace(base)
         (out.parent / META).write_text(json.dumps({"final_from": final_from, "body": round(t, 3),
-                                                   "credits": credits, "w": frame.w, "h": frame.h},
+                                                   "credits": credits, "w": frame.w, "h": frame.h,
+                                                   "title_style": title_style},
                                                   ensure_ascii=False), encoding="utf-8")
         mix_music(base, out, tracks, mix, final_from)
         return media.probe(base)["duration"] or 0
@@ -482,7 +555,8 @@ def recredit(base: Path, credits: list[str]):
         files = [body]
         if credits:
             files.append(_render_segment(credit_segment(credits), None, tmp, 0,
-                                            Frame(meta.get("w") or 1920, meta.get("h") or 1080)))
+                                            Frame(meta.get("w") or 1920, meta.get("h") or 1080),
+                                         card_style=meta.get("title_style") or "carnet"))
         new = tmp / "base.mp4"
         _concat(files, tmp / "list.txt", new)
         new.replace(base)
