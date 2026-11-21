@@ -13,7 +13,8 @@ function zones(current) {
   return list.length && !list.includes(current) ? [current, ...list] : list;
 }
 
-export default function Settings({ slug, ev, disabled, onSaved, onToast }) {
+// story=false : sans le type ni le ton (l'écran Générer les règle dans sa section Histoire).
+export default function Settings({ slug, ev, disabled, onSaved, onToast, story = true }) {
   const [cfg, setCfg] = useState(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(pick(ev));
@@ -53,8 +54,8 @@ export default function Settings({ slug, ev, disabled, onSaved, onToast }) {
         <dl className="settings-sum">
           <dt>Nom</dt><dd>{ev.name}</dd>
           <dt>Dates</dt><dd>{fmtDates(ev.start_date, ev.end_date)}</dd>
-          <dt>Type</dt><dd>{ev.type_label}</dd>
-          <dt>Ton</dt><dd>{ev.tone_label}</dd>
+          {story && <><dt>Type</dt><dd>{ev.type_label}</dd></>}
+          {story && <><dt>Ton</dt><dd>{ev.tone_label}</dd></>}
           <dt>Fuseau</dt><dd>{ev.tz}</dd>
         </dl>
       )}
@@ -67,19 +68,23 @@ export default function Settings({ slug, ev, disabled, onSaved, onToast }) {
             <label>Du<input type="date" value={form.start_date} onChange={up("start_date")} required /></label>
             <label>Au<input type="date" value={form.end_date} min={form.start_date} onChange={up("end_date")} required /></label>
           </div>
-          <Field label="Type d'événement">
-            <Chips options={Object.entries(cfg.types)} value={[form.type]} max={1} onChange={setType} label="Type d'événement" />
-          </Field>
-          <ToneChips cfg={cfg} value={form.tone} onChange={setTone} />
+          {story && (
+            <>
+              <Field label="Type d'événement">
+                <Chips options={Object.entries(cfg.types)} value={[form.type]} max={1} onChange={setType} label="Type d'événement" />
+              </Field>
+              <ToneChips cfg={cfg} value={form.tone} onChange={setTone} />
+            </>
+          )}
           <label>Fuseau horaire de l'événement
             {tzList.length
               ? <select value={form.tz} onChange={up("tz")}>{tzList.map((z) => <option key={z} value={z}>{z.replaceAll("_", " ")}</option>)}</select>
               : <input value={form.tz} onChange={up("tz")} required placeholder="Europe/Paris" />}
           </label>
           <p className="muted small">
-            Le ton s'applique au récit et au film. Le nouveau ton, le type et les dates s'appliquent à la prochaine génération :
-            le récit, le film (et sa musique) et l'album sont refaits avec ces réglages. Le fuseau sert à afficher et à raconter
-            les heures des souvenirs.
+            {story ? "Le ton s'applique au récit et au film. Le nouveau ton, le type et les dates s'appliquent" : "Les nouvelles dates s'appliquent"} à la
+            prochaine génération : le récit, le film (et sa musique) et l'album sont refaits avec ces réglages. Le fuseau sert à
+            afficher et à raconter les heures des souvenirs.
             {ev.published ? " Ce que voit le groupe ne change qu'après avoir publié à nouveau." : ""}
           </p>
           {error && <p className="error">{error}</p>}

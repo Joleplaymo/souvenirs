@@ -49,9 +49,10 @@ export default function Review({ slug, ev, reload, goGenerate }) {
     if (part === "text" && !confirm("Régénérer le texte remplacera tes corrections. Continuer ?")) return;
     act(() => api(`/events/${slug}/generate`, { slug, method: "POST", body: { parts: [part], video_duration: d.video_duration } }), `${label} : régénération lancée`);
   };
+  const canChangeMusic = !!(newMusic && !newMusic.error && newMusic.main); // seulement ce qui est affiché et écouté
   const changeMusic = () => {
-    const body = { parts: ["music"] };
-    if (newMusic && !newMusic.error) body.music = { main_id: newMusic.main ? newMusic.main.id : null, final_id: newMusic.final ? newMusic.final.id : null };
+    if (!canChangeMusic) return;
+    const body = { parts: ["music"], music: { main_id: newMusic.main.id, final_id: newMusic.final ? newMusic.final.id : null } };
     setChanging(false);
     act(() => api(`/events/${slug}/generate`, { slug, method: "POST", body }), "Musique : changement lancé");
   };
@@ -120,10 +121,11 @@ export default function Review({ slug, ev, reload, goGenerate }) {
             {changing && (
               <div className="change-music">
                 <MusicPreview slug={slug} tones={ev.tones} settings={d.video_settings} disabled={busy} onChange={setNewMusic} />
+                {newMusic && !newMusic.error && !newMusic.main && <p className="muted small">Rien à proposer pour ces réglages : le film garde sa musique actuelle.</p>}
                 <p className="muted small">Seule la bande-son change : les plans, le texte et l'album restent les mêmes. Pour changer de genre, d'énergie ou de fin, passe par l'écran Générer.</p>
                 <div className="row">
                   <button className="btn" onClick={() => setChanging(false)}>Annuler</button>
-                  <button className="btn primary" onClick={changeMusic} disabled={busy || newMusic === undefined}>Utiliser cette musique</button>
+                  <button className="btn primary" onClick={changeMusic} disabled={busy || !canChangeMusic}>Utiliser cette musique</button>
                 </div>
               </div>
             )}

@@ -51,6 +51,9 @@ export default function MusicPreview({ slug, tones, settings, disabled, onChange
       if (!loading && res) onChange?.({ main: res.main, final: res.final });
       return;
     }
+    seq.current++; // une réponse encore en route pour d'anciens réglages sera ignorée
+    if (loading) shown.current = null; // recherche abandonnée : revenir à ces réglages relancera une recherche
+    setLoading(false);
     onChange?.(undefined); // la proposition affichée ne correspond plus aux réglages
     const t = setTimeout(() => { seen.current = []; shown.current = key; pick([]); }, 400);
     return () => clearTimeout(t);

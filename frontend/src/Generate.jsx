@@ -125,7 +125,7 @@ export default function Generate({ slug, ev, reload, goReview }) {
 
   return (
     <div className="narrow-col">
-      <Settings slug={slug} ev={ev} disabled={off} onSaved={reload} onToast={setToast} />
+      <Settings slug={slug} ev={ev} disabled={off} onSaved={reload} onToast={setToast} story={false} />
       <section className="card gen">
         <h2>Générer le compte rendu</h2>
         <p className="muted">À partir des {ev.count} souvenirs du groupe : un récit sur le ton « {toneLabel} », un film avec musique et sous-titres, et un album photo à imprimer.</p>

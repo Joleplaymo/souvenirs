@@ -168,33 +168,42 @@ def _rep(slug):
     return db.report(db.one("SELECT * FROM events WHERE slug=?", slug)["id"])
 
 
-def test_preview_returns_and_stores_pick(pick_lib):
+STORED = json.dumps({"main_id": 987654, "final_id": None})
+
+
+def _event_with_music(**kw):
+    """Événement dont reports.music contient déjà un choix (celui du dernier rendu)."""
+    slug, h = _event(**kw)
+    db.update("reports", "event_id", _rep(slug)["event_id"], music=STORED)
+    return slug, h
+
+
+def test_preview_returns_pick_without_storing_it(pick_lib):
     pick_lib(["p1", "p2"])
-    slug, h = _event()
+    slug, h = _event_with_music()
     r = _pick(slug, h, tones=None, video_settings={"duration": 60, "genres": ["funk"]}, exclude=[])
     assert r.status_code == 200, r.text
     j = r.json()
     assert j["main"]["id"] and j["main"]["url"] == f"/api/music/{j['main']['id']}.mp3" and j["message"] == ""
-    rep = _rep(slug)
-    assert json.loads(rep["music"])["main_id"] == j["main"]["id"]
+    assert _rep(slug)["music"] == STORED  # la pré-écoute ne change pas la musique des rendus suivants
 
 
 def test_preview_other_title_uses_exclude(pick_lib):
     pick_lib(["p1", "p2"])
-    slug, h = _event()
+    slug, h = _event_with_music()
     first = _pick(slug, h, video_settings={}, exclude=[]).json()["main"]["id"]
     second = _pick(slug, h, video_settings={}, exclude=[first]).json()["main"]["id"]
     assert second != first
-    assert json.loads(_rep(slug)["music"])["main_id"] == second
+    assert _rep(slug)["music"] == STORED
 
 
 def test_preview_empty_catalogue_message(pick_lib):
     pick_lib([])
-    slug, h = _event()
+    slug, h = _event_with_music()
     r = _pick(slug, h, video_settings={}, exclude=[])
     assert r.status_code == 200
     assert r.json() == {"main": None, "final": None, "message": NO_MUSIC}
-    assert json.loads(_rep(slug)["music"]) == {"main_id": None, "final_id": None}
+    assert _rep(slug)["music"] == STORED
 
 
 def test_preview_validation_and_auth(pick_lib):
@@ -213,22 +222,22 @@ def test_preview_validation_and_auth(pick_lib):
 def test_preview_incompatible_catalogue_gives_no_music(pick_lib, mp3):
     pick_lib(["p1"])
     db.run("UPDATE tracks SET mood='melancolique'")
-    slug, h = _event(tone="drole,festif")
+    slug, h = _event_with_music(tone="drole,festif")
     r = _pick(slug, h, video_settings={}, exclude=[])
     assert r.status_code == 200
     assert r.json() == {"main": None, "final": None, "message": NO_MUSIC}
-    assert json.loads(_rep(slug)["music"]) == {"main_id": None, "final_id": None}
+    assert _rep(slug)["music"] == STORED
 
 
 def test_preview_touchante_returns_final(pick_lib):
     pick_lib(["p1", "p2"])
     db.run("UPDATE tracks SET mood='joyeux', energy=4 WHERE key='p1'")
     db.run("UPDATE tracks SET mood='tendre', energy=1 WHERE key='p2'")
-    slug, h = _event(tone="tendre,festif")
+    slug, h = _event_with_music(tone="tendre,festif")
     r = _pick(slug, h, video_settings={"ending": "touchante", "genres": []}, exclude=[])
     j = r.json()
     assert r.status_code == 200 and j["main"] and j["final"] and j["final"]["id"] != j["main"]["id"]
-    assert json.loads(_rep(slug)["music"]) == {"main_id": j["main"]["id"], "final_id": j["final"]["id"]}
+    assert _rep(slug)["music"] == STORED
 
 
 def test_preview_does_not_touch_video_settings(pick_lib):

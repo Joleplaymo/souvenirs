@@ -499,7 +499,7 @@ NO_MUSIC_MSG = "Aucune musique ne correspond à ces réglages : le film sera san
 
 @app.post("/api/events/{slug}/music/pick")
 def pick_music(slug: str, body: dict = Body(default={}), x_admin_token: str = Header(None)):
-    """Pré-écoute : choisit le morceau (et celui de la fin) pour ces réglages et le mémorise."""
+    """Pré-écoute : propose le morceau (et celui de la fin) pour ces réglages, sans rien enregistrer."""
     ev = get_event(slug)
     require_admin(ev, x_admin_token)
     if body.get("tones") is None:
@@ -523,10 +523,8 @@ def pick_music(slug: str, body: dict = Body(default={}), x_admin_token: str = He
         err(409, "Une génération est déjà en cours.")
     got = music_mod.choose(tones, vs, exclude=exclude)
     main, final = got["main"], got["final"]
-    db.report(ev["id"])
-    # reports.music = la musique choisie pour le prochain rendu (génération ou « Changer la musique »).
-    # Les réglages vidéo ne sont pas enregistrés ici : l'écran Générer les envoie avec /generate.
-    generate.store_music(ev["id"], main["id"] if main else None, final["id"] if final else None)
+    # Sans effet de bord : rien n'est enregistré ici. Les écrans envoient les morceaux entendus avec /generate,
+    # qui les mémorise dans reports.music (sinon les rendus suivants changeraient de musique à l'insu de l'organisateur).
     return {"main": music_mod.public(main) if main else None, "final": music_mod.public(final) if final else None,
             "message": "" if main else NO_MUSIC_MSG}
 
