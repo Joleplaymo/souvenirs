@@ -260,17 +260,64 @@ MONTAGE_SCHEMA = _obj({"segments": {"type": "array", "items": _obj({
     "effect": {"type": "string", "enum": ["none", "slowmo", "speedup", "freeze", "punch"]}})}})
 
 
+RHYTHM_RULES = {
+    "pose": "plans de 3 à 5 s, transitions fondues",
+    "dynamique": "plans de 1,5 à 3 s, coupes sur les temps de la musique",
+    "nerveux": "plans de 0,5 à 1,5 s, coupes franches, quelques plans plus longs (jusqu'à 3 s) pour respirer",
+}
+EFFECT_RULES = {
+    "slowmo": "`slowmo` (ralenti, sur un temps fort)",
+    "speedup": "`speedup` (accéléré, pour passer un moment de transition)",
+    "freeze": "`freeze` (arrêt sur image, sur un instant marquant)",
+    "humor": "`punch` (zoom comique, réservé aux moments drôles)",
+}
+
+
+def _effects_rule(effects: dict) -> str:
+    enabled = [EFFECT_RULES[k] for k in EFFECT_RULES if effects.get(k)]
+    if not enabled:
+        return "aucun effet : le champ `effect` vaut toujours `none`."
+    return ("valeurs autorisées : `none` (par défaut), " + ", ".join(enabled)
+            + ". N'utilise aucune autre valeur que celles-ci, et seulement quand les images s'y prêtent ;"
+            " en cas de doute, `none`.")
+
+
+def _titles_rule(style: str) -> str:
+    if style == "aucun":
+        return "n'ajoute aucun carton : ne produis aucun segment `title`."
+    return (f"style {config.TITLE_STYLES[style]} ; garde des cartons courts, qui reprennent "
+            "l'ambiance de ce style.")
+
+
+def _framing_rule(framing: str) -> str:
+    base = ("l'image entière est affichée sur un fond flou, sans recadrage : garde les visages entiers et "
+            "ne déforme jamais les images.")
+    if framing == "9:16":
+        return "privilégie les médias en portrait et les plans serrés ; " + base
+    if framing == "1:1":
+        return "privilégie les plans centrés ; " + base
+    return "privilégie les médias en paysage ; " + base
+
+
 def montage_prompt(ev, settings: dict, target: int) -> str:
     """Remplit le modèle prompts/montage.md avec l'événement et les réglages vidéo."""
     text = (PROMPT_DIR / "montage.md").read_text(encoding="utf-8")
     event_type = config.LEGACY_TYPES.get(ev["type"], ev["type"])
     values = {
-        "nom": ev["name"],
         "type": config.EVENT_TYPES.get(event_type, config.EVENT_TYPES["autre"]),
         "ton": video_settings.tones_label(_tones(ev)),
         "fin": config.ENDINGS[settings["ending"]],
         "duree": f"{target} secondes",
         "sous_titres": "oui" if settings["subtitles"] else "non",
+        "rythme_nom": config.RHYTHMS[settings["rhythm"]],
+        "rythme": RHYTHM_RULES[settings["rhythm"]],
+        "effets": _effects_rule(settings["effects"]),
+        "style_titres": _titles_rule(settings["title_style"]),
+        "cadrage_nom": config.FRAMINGS[settings["framing"]],
+        "cadrage": _framing_rule(settings["framing"]),
+        # valeur saisie par l'utilisateur : remplacée en dernier, pour qu'un « {{x}} » tapé dans le nom
+        # ne soit pas substitué
+        "nom": ev["name"],
     }
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
