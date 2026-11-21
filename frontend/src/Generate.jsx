@@ -122,13 +122,17 @@ export default function Generate({ slug, ev, reload, goReview }) {
   }
   const toneLabel = form.tones.map((t) => cfg.tones[t] || t).join(" + ").toLowerCase();
   const vs = Object.fromEntries(MUSIC_KEYS.map((k) => [k, form[k]]));
+  const noMusic = !!(music && !music.error && !music.main); // la pré-écoute n'a rien trouvé
+  const film = noMusic
+    ? (form.subtitles ? "un film sous-titré, sans musique" : "un film sans musique ni sous-titres")
+    : (form.subtitles ? "un film avec musique et sous-titres" : "un film avec musique, sans sous-titres");
 
   return (
     <div className="narrow-col">
       <Settings slug={slug} ev={ev} disabled={off} onSaved={reload} onToast={setToast} story={false} />
       <section className="card gen">
         <h2>Générer le compte rendu</h2>
-        <p className="muted">À partir des {ev.count} souvenirs du groupe : un récit sur le ton « {toneLabel} », un film avec musique et sous-titres, et un album photo à imprimer.</p>
+        <p className="muted">À partir des {ev.count} souvenirs du groupe : un récit sur le ton « {toneLabel} », {film}, et un album photo à imprimer.</p>
 
         <details open className="sect">
           <summary><h3>Histoire</h3></summary>

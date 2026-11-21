@@ -1,6 +1,8 @@
 // Pré-écoute de la musique du film (écran Générer et « Changer la musique » en relecture).
 // Propose le morceau (et celui de la séquence finale) pour ces réglages ; « Autre titre » en cherche un autre.
 // onChange(r) : undefined pendant la recherche, puis { main, final } (null si rien) ou { error }.
+// initialExclude : morceaux à ne pas proposer d'emblée (ex. celui déjà dans le film) ; s'il n'y a rien d'autre,
+// on retombe sur la liste complète.
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 
@@ -14,7 +16,7 @@ function Track({ label, t }) {
   );
 }
 
-export default function MusicPreview({ slug, tones, settings, disabled, onChange }) {
+export default function MusicPreview({ slug, tones, settings, disabled, onChange, initialExclude = [] }) {
   const [res, setRes] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -24,7 +26,7 @@ export default function MusicPreview({ slug, tones, settings, disabled, onChange
   const key = JSON.stringify([tones, settings.genres, settings.energy, settings.ending]);
 
   const call = (exclude) => api(`/events/${slug}/music/pick`, { slug, method: "POST", body: { tones, video_settings: settings, exclude } });
-  const pick = async (exclude) => {
+  const pick = async (exclude, first = false) => {
     const n = ++seq.current;
     setLoading(true); setError(""); onChange?.(undefined);
     try {
@@ -39,7 +41,7 @@ export default function MusicPreview({ slug, tones, settings, disabled, onChange
       setRes(r); onChange?.({ main: r.main, final: r.final });
     } catch (e) {
       if (n !== seq.current) return;
-      if (!exclude.length) shown.current = null; // réessai possible (par exemple après une génération en cours)
+      if (first) shown.current = null; // réessai possible (par exemple après une génération en cours)
       setError(e.message); onChange?.({ error: e.message });
     }
     setLoading(false);
@@ -55,7 +57,11 @@ export default function MusicPreview({ slug, tones, settings, disabled, onChange
     if (loading) shown.current = null; // recherche abandonnée : revenir à ces réglages relancera une recherche
     setLoading(false);
     onChange?.(undefined); // la proposition affichée ne correspond plus aux réglages
-    const t = setTimeout(() => { seen.current = []; shown.current = key; pick([]); }, 400);
+    const t = setTimeout(() => {
+      seen.current = initialExclude.filter((id) => id != null);
+      shown.current = key;
+      pick([...seen.current], true);
+    }, 400);
     return () => clearTimeout(t);
   }, [key, disabled]);
   useEffect(() => () => { seq.current++; }, []);

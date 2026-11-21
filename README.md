@@ -38,8 +38,8 @@ L'écran « Générer » est rangé en trois sections : Histoire, Musique, Forma
 - **Catalogue musical** (`music/catalogue.json`) : chaque morceau est étiqueté par genre, énergie
   (1 à 5) et humeur. L'appli filtre le catalogue d'après les réglages, sans laisser l'IA interpréter
   librement. Règle anti-mélancolie : aucun morceau mélancolique ou triste, sauf si le ton contient
-  Tendre ou Nostalgique (exception : la séquence finale d'une fin Touchante ou de l'évolution
-  « Festif puis émotion »).
+  Tendre ou Nostalgique (exception : la séquence finale d'une fin Touchante). Les fichiers
+  téléchargés trop petits ou illisibles sont refusés, et un morceau illisible n'est jamais choisi.
 - **Pré-écoute** : 15 s du morceau proposé, avec « Autre titre » pour en changer avant de générer.
 - **Relecture** : « Changer la musique » remplace la bande-son sans refaire le montage.
 - **Bibliothèque Incompetech** (Kevin MacLeod, CC BY 4.0) : téléchargée au démarrage du worker dans
