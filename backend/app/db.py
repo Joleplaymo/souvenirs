@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS versions (
   video_settings TEXT, music TEXT
 );
 CREATE INDEX IF NOT EXISTS versions_event ON versions(event_id, id);
+CREATE TABLE IF NOT EXISTS tracks (
+  id INTEGER PRIMARY KEY, key TEXT UNIQUE, title TEXT NOT NULL, artist TEXT DEFAULT '', license TEXT DEFAULT '',
+  source_url TEXT DEFAULT '', credit TEXT DEFAULT '', genres TEXT DEFAULT '', energy INTEGER DEFAULT 3,
+  mood TEXT DEFAULT 'joyeux', bpm INTEGER, duration REAL, file TEXT NOT NULL,
+  origin TEXT DEFAULT 'library', created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, kind TEXT NOT NULL, params TEXT DEFAULT '{}',
   status TEXT DEFAULT 'queued', step TEXT DEFAULT '', progress REAL DEFAULT 0, message TEXT DEFAULT '',

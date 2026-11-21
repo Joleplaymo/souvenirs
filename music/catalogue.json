@@ -1,0 +1,6 @@
+[
+  {"key": "detendu", "title": "Détendu", "artist": "Souvenirs", "license": "Libre (synthèse)", "source_url": "", "credit": "", "genres": ["lofi", "piano"], "energy": 2, "mood": "calme", "bpm": 84, "file": "detendu.mp3"},
+  {"key": "sportif", "title": "Sportif", "artist": "Souvenirs", "license": "Libre (synthèse)", "source_url": "", "credit": "", "genres": ["electro", "rock"], "energy": 4, "mood": "epique", "bpm": 124, "file": "sportif.mp3"},
+  {"key": "humour", "title": "Humour", "artist": "Souvenirs", "license": "Libre (synthèse)", "source_url": "", "credit": "", "genres": ["funk", "pop"], "energy": 3, "mood": "joyeux", "bpm": 108, "file": "humour.mp3"},
+  {"key": "emotion", "title": "Émotion", "artist": "Souvenirs", "license": "Libre (synthèse)", "source_url": "", "credit": "", "genres": ["piano"], "energy": 1, "mood": "melancolique", "bpm": 66, "file": "emotion.mp3"}
+]

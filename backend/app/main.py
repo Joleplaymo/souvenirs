@@ -18,11 +18,16 @@ from starlette.requests import ClientDisconnect
 from . import config, db
 from .pipeline import album as album_mod
 from .pipeline import generate, media, settings
+from .pipeline import music as music_mod
 from .pipeline import versions as versions_mod
 
 log = logging.getLogger("souvenirs")
 app = FastAPI(title="Souvenirs", docs_url=None, redoc_url=None, openapi_url=None)
 db.init()
+try:
+    music_mod.sync_catalogue()
+except Exception:
+    log.exception("synchronisation du catalogue musical impossible")
 
 EXT = {"audio/webm": "webm", "audio/mp4": "m4a", "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/wav": "wav",
        "audio/x-m4a": "m4a", "audio/aac": "aac", "video/mp4": "mp4", "video/quicktime": "mov",

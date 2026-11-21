@@ -1,4 +1,5 @@
 """Processus de fond : préparation des médias, génération, purge des fichiers bruts."""
+import logging
 import shutil
 import threading
 import time
@@ -6,8 +7,9 @@ import traceback
 from datetime import datetime, timedelta, timezone
 
 from . import config, db
-from .pipeline import generate, media
+from .pipeline import generate, media, music
 
+log = logging.getLogger("souvenirs")
 LIGHT = ("prepare",)
 
 
@@ -66,6 +68,10 @@ def purge():
 
 def main():
     db.init()
+    try:
+        music.sync_catalogue()
+    except Exception:
+        log.exception("synchronisation du catalogue musical impossible")
     # reprise après redémarrage : les tâches interrompues repartent (les transcriptions déjà faites sont gardées)
     db.run("UPDATE jobs SET status='queued' WHERE status='running'")
     from . import demo
