@@ -109,7 +109,7 @@ def generate(job):
     if params.get("video_duration"):
         db.update("reports", "event_id", ev["id"], video_duration=int(params["video_duration"]))
     if "video_prompt" in params:  # consignes pour le film, gardées pour les générations suivantes
-        db.update("reports", "event_id", ev["id"], video_prompt=str(params["video_prompt"] or "").strip()[:2000])
+        db.update("reports", "event_id", ev["id"], video_prompt=str(params["video_prompt"] or "").strip()[:4000])
         rep = db.report(ev["id"])
     target = int(params.get("video_duration") or rep["video_duration"] or 120)
 

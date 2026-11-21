@@ -83,7 +83,7 @@ export default function Generate({ slug, ev, reload, goReview }) {
           </select>
         </label>
         <label>Consignes pour le film <span className="muted small">(facultatif)</span>
-          <textarea rows={10} style={{ minHeight: "14em" }} maxLength={2000} value={wishes} onChange={(e) => setWishes(e.target.value)} disabled={active}
+          <textarea rows={10} style={{ minHeight: "14em" }} maxLength={4000} value={wishes} onChange={(e) => setWishes(e.target.value)} disabled={active}
             placeholder="Ex. : commence par l'arrivée au chalet, garde beaucoup de vidéos de la course, mets en avant Léa et Max, finis sur le coucher de soleil. Pas de sous-titres sur les photos." />
         </label>
         <p className="muted small">L'IA suit ces consignes pour choisir les moments, leur ordre, la durée des plans, les cartons et les sous-titres, sans jamais inventer. La musique dépend du ton. Elles sont gardées pour les prochaines générations (et pour « Régénérer » le film en relecture).</p>
