@@ -23,9 +23,39 @@ retrouve sur la page d'accueil, dans « Mes événements », après saisie du co
 | `backend/app/main.py` | API HTTP, liens secrets, envois par morceaux, publication |
 | `backend/app/worker.py` | file de tâches de fond, purge des fichiers bruts |
 | `backend/app/pipeline/` | `transcribe` (Whisper), `ai` (Claude), `video` (FFmpeg), `album` (PDF), `generate` (enchaînement) |
+| `backend/tests/` | tests du backend (pytest) |
 | `frontend/` | interface React (Vite), installable sur l'écran d'accueil |
 | `music/` | catalogue musical : 4 morceaux synthétisés libres de droits (`tools/make_music.py`) et ~40 morceaux Kevin MacLeod (Incompetech, CC BY 4.0) téléchargés au démarrage dans le volume de données (`tools/fetch_music.py`) ; le crédit est ajouté en fin de film |
 | `demo/` | médias de l'événement de démonstration (`tools/make_demo.py`) |
+
+## Réglages vidéo et musique
+
+L'écran « Générer » est rangé en trois sections : Histoire, Musique, Format.
+
+- **Ton** : 10 choix, 2 au maximum. Le même ton sert au compte rendu écrit et au film ; le changer à
+  la génération le change pour l'événement entier. Il est pré-rempli selon le type d'événement
+  (10 types). Les anciens tons et types sont convertis automatiquement au démarrage.
+- **Catalogue musical** (`music/catalogue.json`) : chaque morceau est étiqueté par genre, énergie
+  (1 à 5) et humeur. L'appli filtre le catalogue d'après les réglages, sans laisser l'IA interpréter
+  librement. Règle anti-mélancolie : aucun morceau mélancolique ou triste, sauf si le ton contient
+  Tendre ou Nostalgique (exception : la séquence finale d'une fin Touchante ou de l'évolution
+  « Festif puis émotion »).
+- **Pré-écoute** : 15 s du morceau proposé, avec « Autre titre » pour en changer avant de générer.
+- **Relecture** : « Changer la musique » remplace la bande-son sans refaire le montage.
+- **Bibliothèque Incompetech** (Kevin MacLeod, CC BY 4.0) : téléchargée au démarrage du worker dans
+  le volume de données, une seule fois. Pour le faire à la main : `python tools/fetch_music.py
+  [--dest DOSSIER]`. Le crédit est ajouté automatiquement en fin de film.
+- **Tes propres MP3** : écran « Musiques » (30 Mo maximum par fichier, licence à renseigner).
+
+## Tests
+
+Les tests du backend tournent dans Docker (Git Bash sous Windows ; sous Linux ou macOS, remplacer
+`$(pwd -W)` par `$PWD` et supprimer `MSYS_NO_PATHCONV=1`) :
+
+```bash
+docker build -t souvenirs:dev .
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W)/backend/app:/app/app" -v "$(pwd -W)/backend/tests:/app/tests" -v "$(pwd -W)/music:/app/music" -e DATA_DIR=/tmp/data -e ADMIN_CODE=test souvenirs:dev sh -c "pip install -q --user pytest httpx && python -m pytest -q -p no:cacheprovider tests"
+```
 
 ## Déploiement sur le VPS Hostinger
 
