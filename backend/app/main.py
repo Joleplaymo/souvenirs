@@ -500,6 +500,54 @@ def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Heade
     return {"job_id": jid}
 
 
+# ------------------------------------------------------------------ préréglages
+# Communs à tous les événements (un seul organisateur par installation). Liste triée par nom.
+
+def _preset_public(r):
+    d = db.jl(r["data"], {})
+    return {"id": r["id"], "name": r["name"], "tones": d.get("tones", []),
+            "video_settings": d.get("video_settings", {}), "created_at": r["created_at"]}
+
+
+@app.get("/api/events/{slug}/presets")
+def list_presets(slug: str, x_admin_token: str = Header(None)):
+    require_admin(get_event(slug), x_admin_token)
+    return [_preset_public(r) for r in db.q("SELECT * FROM presets ORDER BY name COLLATE NOCASE, id")]
+
+
+@app.post("/api/events/{slug}/presets")
+def save_preset(slug: str, body: dict = Body(...), x_admin_token: str = Header(None)):
+    """Enregistre les tons et réglages vidéo sous un nom ; un nom déjà pris est remplacé."""
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    name = body.get("name")
+    name = name.strip() if isinstance(name, str) else ""
+    if not 1 <= len(name) <= 60:
+        err(400, "Donne un nom de 1 à 60 caractères au préréglage.")
+    t = body.get("tones")
+    if not isinstance(t, (list, str)) or (isinstance(t, list) and any(not isinstance(x, str) for x in t)):
+        err(400, "Tons invalides.")
+    try:
+        tones = settings.parse_tones(t)
+    except ValueError as e:
+        err(400, str(e))
+    raw = body.get("video_settings")
+    if raw is not None and not isinstance(raw, dict):
+        err(400, "Réglages vidéo invalides.")
+    data = json.dumps({"tones": tones, "video_settings": settings.normalize(raw, ev["type"])}, ensure_ascii=False)
+    db.run("INSERT INTO presets (name, data, created_at) VALUES (?,?,?) "
+           "ON CONFLICT(name) DO UPDATE SET data=excluded.data, created_at=excluded.created_at",
+           name, data, db.now())
+    return _preset_public(db.one("SELECT * FROM presets WHERE name=?", name))
+
+
+@app.delete("/api/events/{slug}/presets/{preset_id}")
+def delete_preset(slug: str, preset_id: int, x_admin_token: str = Header(None)):
+    require_admin(get_event(slug), x_admin_token)
+    db.run("DELETE FROM presets WHERE id=?", preset_id)
+    return {"ok": True}
+
+
 NO_MUSIC_MSG = "Aucune musique ne correspond à ces réglages : le film sera sans musique."
 
 
