@@ -24,7 +24,7 @@ retrouve sur la page d'accueil, dans « Mes événements », après saisie du co
 | `backend/app/worker.py` | file de tâches de fond, purge des fichiers bruts |
 | `backend/app/pipeline/` | `transcribe` (Whisper), `ai` (Claude), `video` (FFmpeg), `album` (PDF), `generate` (enchaînement) |
 | `frontend/` | interface React (Vite), installable sur l'écran d'accueil |
-| `music/` | musiques de fond synthétisées, libres de droits (`tools/make_music.py`) |
+| `music/` | catalogue musical : 4 morceaux synthétisés libres de droits (`tools/make_music.py`) et ~40 morceaux Kevin MacLeod (Incompetech, CC BY 4.0) téléchargés au démarrage dans le volume de données (`tools/fetch_music.py`) ; le crédit est ajouté en fin de film |
 | `demo/` | médias de l'événement de démonstration (`tools/make_demo.py`) |
 
 ## Déploiement sur le VPS Hostinger

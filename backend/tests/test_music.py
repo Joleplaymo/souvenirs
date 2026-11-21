@@ -102,3 +102,81 @@ def test_allowed_rule():
     assert music.allowed(m, ["nostalgique"], False, "festive")
     assert music.allowed(m, ["drole"], True, "touchante")
     assert not music.allowed(m, ["drole"], True, "festive")
+
+
+def test_catalogue_json_is_valid():
+    from pathlib import Path
+
+    f = Path(__file__).resolve().parents[2] / "music" / "catalogue.json"
+    if not f.is_file():
+        f = Path("/app/music/catalogue.json")
+    entries = json.loads(f.read_text(encoding="utf-8"))
+    keys = [e["key"] for e in entries]
+    assert len(keys) == len(set(keys))
+    required = {"key", "title", "artist", "license", "source_url", "credit", "genres", "energy", "mood", "bpm", "file"}
+    for e in entries:
+        assert required <= set(e), e["key"]
+        assert e["genres"] and all(g in config.GENRES for g in e["genres"]), e["key"]
+        assert e["mood"] in config.MOODS, e["key"]
+        assert 1 <= e["energy"] <= 5, e["key"]
+        if e["artist"] == "Kevin MacLeod":
+            assert e["license"] == "CC BY 4.0"
+            assert e["credit"] == f"Musique : « {e['title']} » — Kevin MacLeod (incompetech.com), licence CC BY 4.0"
+            assert e["mp3_url"].startswith("https://incompetech.com/")
+        else:
+            assert e["artist"] == "Souvenirs" and e["credit"] == "" and "mp3_url" not in e
+
+
+class FakeResp:
+    def __init__(self, data):
+        self.data = data
+
+    def read(self, *a):
+        return self.data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_fetch_missing(tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    src.mkdir()
+    monkeypatch.setattr(config, "MUSIC_DIR", src)
+    entries = [entry(k, "joyeux", ["pop"], 3, mp3_url=f"https://incompetech.com/{k}.mp3") for k in ("a", "b", "c")]
+    entries.append(entry("local", "joyeux", ["pop"], 3))  # sans mp3_url : ignoré
+    (src / "catalogue.json").write_text(json.dumps(entries), encoding="utf-8")
+    dest = tmp_path / "lib"
+    dest.mkdir()
+    (dest / "a.mp3").write_bytes(b"old")
+    seen = []
+
+    def opener(req, timeout=None):
+        seen.append((req.full_url, req.get_header("User-agent")))
+        if req.full_url.endswith("/c.mp3"):
+            raise OSError("réseau coupé")
+        return FakeResp(b"mp3data")
+
+    res = music.fetch_missing(dest=dest, delay=0, opener=opener)
+    assert res == {"ok": 1, "skipped": 1, "failed": 1}
+    assert (dest / "a.mp3").read_bytes() == b"old"
+    assert (dest / "b.mp3").read_bytes() == b"mp3data"
+    assert not (dest / "c.mp3").exists()
+    assert sorted(p.name for p in dest.iterdir()) == ["a.mp3", "b.mp3"]  # aucun fichier temporaire
+    assert [u for u, _ in seen] == ["https://incompetech.com/b.mp3", "https://incompetech.com/c.mp3"]
+    assert all(ua == "souvenirs-app" for _, ua in seen)
+
+
+def test_path_prefers_library_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "MUSIC_DIR", tmp_path / "m")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "d")
+    (tmp_path / "m").mkdir()
+    (tmp_path / "d" / "music" / "library").mkdir(parents=True)
+    t = {"origin": "library", "file": "x.mp3"}
+    assert music.path(t) is None
+    (tmp_path / "m" / "x.mp3").write_bytes(b"1")
+    assert music.path(t) == tmp_path / "m" / "x.mp3"
+    (tmp_path / "d" / "music" / "library" / "x.mp3").write_bytes(b"2")
+    assert music.path(t) == tmp_path / "d" / "music" / "library" / "x.mp3"

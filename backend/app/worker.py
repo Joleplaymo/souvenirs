@@ -66,12 +66,22 @@ def purge():
         db.run("DELETE FROM uploads WHERE id=?", up["id"])
 
 
+def _fetch_library():
+    """Télécharge la bibliothèque en arrière-plan, puis resynchronise (durées). Ne bloque rien."""
+    try:
+        music.fetch_missing()
+        music.sync_catalogue()
+    except Exception:
+        log.exception("téléchargement de la bibliothèque musicale impossible")
+
+
 def main():
     db.init()
     try:
         music.sync_catalogue()
     except Exception:
         log.exception("synchronisation du catalogue musical impossible")
+    threading.Thread(target=_fetch_library, daemon=True).start()
     # reprise après redémarrage : les tâches interrompues repartent (les transcriptions déjà faites sont gardées)
     db.run("UPDATE jobs SET status='queued' WHERE status='running'")
     from . import demo

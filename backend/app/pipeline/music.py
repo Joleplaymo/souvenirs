@@ -1,6 +1,9 @@
 """Catalogue musical : synchronisation, règle anti-mélancolie, choix des morceaux."""
 import json
 import logging
+import os
+import time
+import urllib.request
 from pathlib import Path
 
 from .. import config, db
@@ -36,9 +39,57 @@ def path(track: dict) -> Path | None:
     """Fichier audio du morceau, ou None s'il est absent."""
     if track.get("origin") == "upload":
         p = config.DATA_DIR / "music" / "uploads" / track["file"]
-    else:
-        p = config.MUSIC_DIR / track["file"]
+        return p if p.is_file() else None
+    p = library_dir() / track["file"]
+    if p.is_file():
+        return p
+    p = config.MUSIC_DIR / track["file"]
     return p if p.is_file() else None
+
+
+def library_dir() -> Path:
+    """Dossier où sont téléchargés les morceaux de la bibliothèque (volume de données)."""
+    return config.DATA_DIR / "music" / "library"
+
+
+def fetch_missing(dest=None, delay: float = 1.0, opener=None) -> dict:
+    """Télécharge les morceaux du catalogue (entrées avec mp3_url) absents de dest.
+    Écriture atomique, une pause entre deux téléchargements, un échec est journalisé et n'arrête rien."""
+    dest = Path(dest) if dest else library_dir()
+    opener = opener or urllib.request.urlopen
+    res = {"ok": 0, "skipped": 0, "failed": 0}
+    f = config.MUSIC_DIR / "catalogue.json"
+    if not f.is_file():
+        return res
+    dest.mkdir(parents=True, exist_ok=True)
+    first = True
+    for e in json.loads(f.read_text(encoding="utf-8")):
+        url = e.get("mp3_url")
+        if not url:
+            continue
+        target = dest / e["file"]
+        if target.is_file():
+            res["skipped"] += 1
+            continue
+        if not first and delay:
+            time.sleep(delay)
+        first = False
+        tmp = target.with_name(target.name + ".part")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "souvenirs-app"})
+            with opener(req, timeout=60) as r:
+                data = r.read()
+            if not data:
+                raise ValueError("fichier vide")
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+            res["ok"] += 1
+        except Exception as ex:
+            log.warning("téléchargement impossible : %s (%s)", url, ex)
+            res["failed"] += 1
+            tmp.unlink(missing_ok=True)
+    log.info("bibliothèque musicale : %s", res)
+    return res
 
 
 def public(track: dict) -> dict:
@@ -71,8 +122,8 @@ def sync_catalogue() -> int:
         elif row["origin"] == "library":
             db.update("tracks", "id", row["id"], **vals)
     for t in db.q("SELECT id, file FROM tracks WHERE origin='library' AND duration IS NULL"):
-        p = config.MUSIC_DIR / t["file"]
-        if not p.is_file():
+        p = path(dict(t))
+        if p is None:
             continue
         try:
             from . import media
