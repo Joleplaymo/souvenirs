@@ -234,3 +234,31 @@ def test_fades_follow_rhythm(clip, tmp_path):
         firsts[rhythm] = _bright(_frames(out, tmp_path, 0, "f" + rhythm)[0])
     assert firsts["nerveux"] > 150
     assert firsts["pose"] < 60
+
+
+def _row(**cols):
+    """Un élément tel que le renvoie la base (sqlite3.Row, sans .get)."""
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    names = ", ".join(f"? AS {k}" for k in cols)
+    return con.execute(f"SELECT {names}", list(cols.values())).fetchone()
+
+
+@pytest.mark.parametrize("effect", ["none", "slowmo", "speedup", "freeze", "punch"])
+def test_video_segment_from_db_row(clip, tmp_path, effect):
+    item = _row(id=2, event_id=1, kind="video", duration=3.0)
+    seg = _seg(effect, 2.0, start=2.5)
+    out = video._render_segment(seg, item, tmp_path, 0, SMALL, style())
+    assert abs(media.probe(out)["duration"] - 2.0) <= 0.1
+
+
+def test_render_keeps_video_from_db_row(clip, tmp_path):
+    """Un extrait vidéo venu de la base n'est pas ignoré par render (2 s de photo + 2 s de vidéo)."""
+    items = {1: _row(id=1, event_id=1, kind="photo", duration=None),
+             2: _row(id=2, event_id=1, kind="video", duration=3.0)}
+    segs = [{"type": "photo", "item_id": 1, "text": "", "duration": 2.0, "effect": "none"}, _seg("speedup", 2.0, 0.5)]
+    out = tmp_path / "o" / "video.mp4"
+    out.parent.mkdir()
+    total = video.render(segs, items, out, {"main": None, "final": None, "credits": []}, 50, SMALL, style())
+    assert abs(total - 4.0) <= 0.2

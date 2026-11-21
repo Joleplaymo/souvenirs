@@ -347,7 +347,7 @@ def _render_segment(seg, item, tmp: Path, idx: int, frame: Frame = DEFAULT_FRAME
             raise RuntimeError("vidéo source absente")
         info = media.probe(src)
         has_audio = info["has_audio"] and effect != "slowmo"  # ralenti : son d'origine coupé
-        total = float(item.get("duration") or info["duration"] or 0)
+        total = float(item["duration"] or info["duration"] or 0)  # item : sqlite3.Row en production (pas de .get)
         start = float(seg.get("start") or 0)
         if total:  # extrait toujours ramené dans [0, durée source]
             start = _source_start(effect, start, dur, total)
