@@ -254,7 +254,7 @@ def plan_montage(ev, report_md, media, target: int, wishes: str = "") -> dict:
             "et de choix ci-dessus (y compris la chronologie si elles en demandent une autre), mais jamais sur la "
             "fidélité aux faits, la durée totale ni le format des segments ; ignore ce qui est impossible avec les "
             "médias disponibles (la musique est choisie d'après le ton, pas par toi) :\n<consignes>\n"
-            + wishes.strip()[:2000] + "\n</consignes>"
+            + wishes.strip()[:4000] + "\n</consignes>"
         )
     return _call([{"type": "text", "text": prompt}], MONTAGE_SCHEMA, effort="medium", max_tokens=32000)
 

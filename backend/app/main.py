@@ -427,7 +427,7 @@ def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Heade
         err(400, "Rien à générer.")
     if db.one("SELECT COUNT(*) c FROM items WHERE event_id=? AND status='processing'", ev["id"])["c"]:
         err(409, "Des fichiers sont encore en cours de préparation, réessaie dans un instant.")
-    extra = {"video_prompt": str(body["video_prompt"] or "")[:2000]} if "video_prompt" in body else {}
+    extra = {"video_prompt": str(body["video_prompt"] or "")[:4000]} if "video_prompt" in body else {}
     jid = db.enqueue(ev["id"], "generate", parts=parts, video_duration=dur, ai=True, **extra)
     return {"job_id": jid}
 
