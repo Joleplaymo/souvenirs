@@ -80,26 +80,38 @@ def test_landscape_photo_in_vertical_not_cropped(stub, tmp_path):
     assert max(top) < 150
 
 
+def _assert_margins(box, w, h):
+    assert box is not None
+    assert box[0] > 0.02 * w and box[2] < w - 0.02 * w, box
+    assert box[1] > 0.02 * h and box[3] < h - 0.02 * h, box
+    assert box[2] - box[0] <= 0.94 * w, box
+
+
 def test_subtitle_inside_frame_vertical(tmp_path):
     out = tmp_path / "s.png"
     video.subtitle_png("Un très long sous-titre " * 5 + "fin", out, video.frame_for("9:16"))
     im = Image.open(out)
     assert im.size == (1080, 1920)
-    box = im.getchannel("A").getbbox()
-    assert box and box[0] >= 0 and box[2] <= 1080 and box[3] <= 1920
+    _assert_margins(im.getchannel("A").getbbox(), 1080, 1920)
 
 
 def test_subtitle_90_chars_fit(tmp_path):
     out = tmp_path / "s.png"
-    video.subtitle_png("x" * 8 + " mot" * 20 + " fin", out, video.frame_for("9:16"))
-    box = Image.open(out).getchannel("A").getbbox()
-    assert box[2] - box[0] <= 1080
+    text = ("x" * 8 + " mot" * 20 + " fin")[:90]
+    assert len(text) == 90
+    video.subtitle_png(text, out, video.frame_for("9:16"))
+    _assert_margins(Image.open(out).getchannel("A").getbbox(), 1080, 1920)
 
 
 def test_title_card_text_inside_vertical(tmp_path):
     out = tmp_path / "t.png"
     video.title_card("Un week-end extraordinaire en Bretagne avec toute la famille", out, video.frame_for("9:16"))
-    assert Image.open(out).size == (1080, 1920)
+    im = Image.open(out).convert("RGB")
+    assert im.size == (1080, 1920)
+    # texte clair (#f7ecd9) ; le fond est sombre et les filets dorés ont un bleu faible
+    mask = im.point(lambda v: 255 if v > 180 else 0).split()
+    text = Image.eval(mask[2], lambda v: v)  # bleu > 180 : texte seul
+    _assert_margins(text.getbbox(), 1080, 1920)
 
 
 def test_meta_stores_frame_and_recredit_uses_it(stub, tmp_path):
