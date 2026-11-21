@@ -457,8 +457,6 @@ META = "video_base.json"
 
 CROSSFADE = 2.0  # fondu enchaîné entre deux morceaux
 MIN_TRACK = 4.0  # un morceau qui durerait moins longtemps n'est pas joué (le précédent continue)
-# même début pour plusieurs morceaux : on garde le plus important
-PLACE_PRIORITY = ("final", "main", "peak", "intro")
 
 
 def credit_lines(credits) -> list[str]:
@@ -487,43 +485,65 @@ def meta_sections(meta: dict) -> list[float]:
     return [meta["final_from"]] if meta.get("final_from") is not None else []
 
 
+def core_role(roles) -> str | None:
+    """Rôle qui porte le film et joue toujours : main (constante, montée, festif puis émotion),
+    peak (calme puis explosion, qui n'a pas de main) ; à défaut, intro. Jamais le morceau final."""
+    return next((r for r in ("main", "peak", "intro") if r in roles), None)
+
+
 def place_tracks(roles: list[str], sections, body, evolution: str = "constante") -> list[tuple[str, float]]:
-    """Début de chaque morceau joué : [(rôle, début)] dans l'ordre. intro à 0 ; main au début de séquence le plus
-    proche du tiers du film (montée) ou à 0 ; peak au plus proche des 2/3 (montée) ou de 40 % (calme puis
-    explosion) ; final au début de la dernière séquence. Seuls comptent les débuts qui laissent 4 s de part et
-    d'autre. Le premier morceau commence à 0 ; un morceau de moins de 4 s est retiré, le précédent continue ;
-    le morceau final ne remonte jamais avant sa séquence (seul, il n'est pas joué)."""
+    """Début de chaque morceau joué : [(rôle, début)] dans l'ordre.
+    - final : au début réel de la dernière séquence (dernier carton après l'ouverture), seulement s'il laisse
+      4 s de part et d'autre ; sinon pas de morceau final (il ne remonte jamais sur une séquence d'avant).
+    - rôle principal (core_role) : toujours joué. main au début de séquence le plus proche du tiers du film
+      (montée) ou à 0 ; peak au plus proche de 40 % (calme puis explosion). S'il tombe sur le début du final,
+      il passe à 0 à la place de l'intro.
+    - autres (intro à 0, peak de la montée au plus proche des 2/3) : seulement sur un début libre.
+    Seuls comptent les débuts qui laissent 4 s de part et d'autre ; le premier morceau commence à 0.
+    Un morceau de moins de 4 s est retiré (le précédent continue), sauf le rôle principal : c'est alors le morceau
+    d'avant qui est retiré et le principal prend son début. Priorité : final > principal > autres."""
     body = float(body or 0)
-    starts = sorted({0.0, *(round(float(s), 3) for s in (sections or [])
-                            if s is not None and MIN_TRACK <= float(s) <= body - MIN_TRACK)})
+    secs = [round(float(s), 3) for s in (sections or []) if s is not None]
+
+    def fits(s):
+        return MIN_TRACK <= s <= body - MIN_TRACK
+
+    starts = sorted({0.0, *(s for s in secs if fits(s))})
 
     def near(frac):
         return min(starts, key=lambda s: (abs(s - body * frac), s))
 
-    want = {}
-    for r in roles:
-        if r == "intro":
-            want[r] = 0.0
-        elif r == "main":
-            want[r] = near(1 / 3) if evolution == "montee" else 0.0
-        elif r == "peak":
-            want[r] = near(0.4 if evolution == "calme_explosion" else 2 / 3)
-        elif r == "final" and len(starts) > 1:
-            want[r] = starts[-1]
-    others = [r for r in want if r != "final"]
-    if not others:
+    core = core_role(roles)
+    if core is None:  # morceau final seul : pas de musique
         return []
-    want[min(others, key=lambda r: want[r])] = 0.0  # pas de silence au début du film
-    at = {}
-    for r in sorted(want, key=PLACE_PRIORITY.index):
-        at.setdefault(want[r], r)
+    at = {}  # début → rôle
+    inner = [s for s in secs if s > 0]
+    if "final" in roles and inner and fits(max(inner)):
+        at[max(inner)] = "final"
+    want = {"intro": 0.0, "main": near(1 / 3) if evolution == "montee" else 0.0,
+            "peak": near(0.4 if evolution == "calme_explosion" else 2 / 3)}
+    at[0.0 if want[core] in at else want[core]] = core
+    for r in ("intro", "main", "peak"):
+        if r in roles and r != core and want[r] not in at:
+            at[want[r]] = r
     placed = sorted(at.items())
+    if placed[0][0] > 0:  # pas de silence au début du film (le premier n'est jamais le final : core le précède)
+        placed[0] = (0.0, placed[0][1])
     while len(placed) > 1:
         ends = [s for s, _ in placed[1:]] + [body]
-        short = next((i for i, (s, _) in enumerate(placed) if ends[i] - s < MIN_TRACK), None)
-        if short is None:
+        i = next((i for i, (s, _) in enumerate(placed) if ends[i] - s < MIN_TRACK), None)
+        if i is None:
             break
-        del placed[max(short, 1)]  # le précédent continue (le premier, à 0, reste)
+        role = placed[i][1]
+        if role == core and i > 0 and placed[i - 1][1] != "final":
+            placed[i] = (placed[i - 1][0], role)  # le principal prend le début du morceau d'avant
+            del placed[i - 1]
+        elif role == core and i + 1 < len(placed) and placed[i + 1][1] != "final":
+            del placed[i + 1]  # le principal continue
+        elif i > 0:
+            del placed[i]  # le précédent continue
+        else:
+            del placed[1]
     return [(r, s) for s, r in placed]
 
 

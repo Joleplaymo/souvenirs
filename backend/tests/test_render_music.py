@@ -524,6 +524,25 @@ def test_section_starts_and_placement():
     assert placed == [("main", 0.0), ("final", 12.0)]
 
 
+def test_final_only_on_last_sequence():
+    """Dernier carton à moins de 4 s de la fin : pas de morceau final (jamais sur une séquence d'avant)."""
+    assert video.place_tracks(["main", "final"], [0, 10, 27], 30, "festif_emotion") == [("main", 0.0)]
+    assert video.place_tracks(["main", "final"], [0, 10, 26], 30, "festif_emotion") == [("main", 0.0), ("final", 26.0)]
+    assert video.place_tracks(["main", "final"], [0, 2], 30, "festif_emotion") == [("main", 0.0)]
+
+
+def test_core_role_always_plays():
+    """Le morceau principal (main ; pic pour calme puis explosion) joue toujours ; priorité final > principal > autres."""
+    assert video.core_role(["intro", "peak", "final"]) == "peak"
+    assert video.place_tracks(["intro", "main", "peak", "final"], [0, 12], 30, "montee") == [("main", 0.0), ("final", 12.0)]
+    assert video.place_tracks(["intro", "peak", "final"], [0, 12], 30, "calme_explosion") == [("peak", 0.0), ("final", 12.0)]
+    placed = video.place_tracks(["intro", "main", "peak"], [0, 10, 12], 30, "montee")
+    assert "main" in dict(placed)
+    starts = [s for _, s in placed] + [30.0]
+    assert all(b - a >= 4.0 for a, b in zip(starts, starts[1:])), placed
+    assert generate.lead([{"role": "intro", "track": {"id": 1}}, {"role": "peak", "track": {"id": 2}}]) == {"id": 2}
+
+
 def test_short_film_collapses_tracks():
     all_roles = ["intro", "main", "peak", "final"]
     for segs in ([{"type": "title", "duration": 3.0}, {"type": "photo", "duration": 27.0}],
@@ -538,9 +557,13 @@ def test_short_film_collapses_tracks():
         for evo in ("constante", "montee", "calme_explosion", "festif_emotion"):
             placed = video.place_tracks(all_roles, sections, 30.0, evo)
             assert 1 <= len(placed) <= 2, (segs, evo, placed)
+            placed = video.place_tracks(music.roles_for({"evolution": evo, "ending": "touchante"}), sections, 30.0, evo)
+            assert 1 <= len(placed) <= 2, (segs, evo, placed)
             starts = [s for _, s in placed] + [30.0]
             assert placed[0][1] == 0.0
             assert all(b - a >= 4.0 for a, b in zip(starts, starts[1:])), (segs, evo, placed)
+            core = "peak" if evo == "calme_explosion" else "main"
+            assert core in dict(placed), (segs, evo, placed)
             # le morceau final ne remonte jamais avant la dernière séquence
             assert all(s == sections[0] and s > 0 for r, s in placed if r == "final"), (segs, evo, placed)
 
@@ -569,7 +592,8 @@ def test_credits_list_every_played_track(lib, tmp_path, monkeypatch):
     video.render(_sections_segs(items), items, out, tracks, 60, evolution="montee")
     meta = video.read_meta(tmp_path / video.BASE)
     assert [round(s) for s in meta["sections"]] == [0, 6, 12]
-    # intro 0 s, principal 6 s, final 12 s (même début que le pic : le final l'emporte) ; le pic n'est pas joué
+    # intro 0 s, principal 6 s, final 12 s (même début que le pic de la montée : final > principal > autres) ;
+    # le pic n'est pas joué
     assert meta["credits"] == [CREDIT.replace("Carefree", r) for r in ("intro", "main", "final")]
     assert "« peak »" not in calls[-1] and all(f"« {r} »" in calls[-1] for r in ("intro", "main", "final"))
     info = media.probe(out)

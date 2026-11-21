@@ -135,10 +135,11 @@ def pick_tracks(ev, rep, st) -> list[dict]:
 
 
 def lead(chosen: list[dict]) -> dict | None:
-    """Morceau qui porte le film (celui qui joue le plus longtemps) : le principal ; sans principal,
-    le pic (« calme puis explosion » : de 40 % à la fin) ; sinon le premier."""
+    """Morceau qui porte le film, toujours joué (video.core_role) : le principal ; « calme puis explosion » :
+    le pic. Donne le tempo du montage et le « Morceau du film » des écrans."""
     by = {c["role"]: c["track"] for c in chosen}
-    return by.get("main") or by.get("peak") or (chosen[0]["track"] if chosen else None)
+    core = video.core_role(by)
+    return by[core] if core else None
 
 
 def _credits(tracks) -> list[str]:
