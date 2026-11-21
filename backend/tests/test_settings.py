@@ -65,8 +65,69 @@ def test_normalize_fills_and_clamps():
 def test_normalize_empty_and_invalid():
     n = settings.normalize(None, "weekend")
     assert n == {"ending": "festive", "genres": ["pop", "electro", "funk"],
-                 "energy": 4, "mix": 55, "duration": 120, "subtitles": True}
+                 "energy": 4, "mix": 55, "duration": 120, "subtitles": True,
+                 "rhythm": "dynamique", "evolution": "montee",
+                 "effects": {"slowmo": True, "speedup": True, "freeze": True, "humor": True},
+                 "title_style": "carnet", "framing": "16:9"}
     n = settings.normalize({"ending": "x", "genres": ["zzz"], "subtitles": False}, "mariage")
     assert n["ending"] == "touchante"
     assert n["genres"] == ["piano", "folk", "orchestral"]
     assert n["subtitles"] is False
+
+
+def test_normalize_new_defaults_weekend():
+    n = settings.normalize({}, "weekend")
+    assert n["rhythm"] == "dynamique"
+    assert n["evolution"] == "montee"
+    assert n["effects"] == {"slowmo": True, "speedup": True, "freeze": True, "humor": True}
+    assert n["title_style"] == "carnet"
+    assert n["framing"] == "16:9"
+
+
+def test_normalize_mariage_humor_off():
+    n = settings.normalize({}, "mariage")
+    assert n["rhythm"] == "pose"
+    assert n["effects"]["humor"] is False
+    assert n["effects"]["slowmo"] is True
+
+
+def test_normalize_rejects_unknown_values():
+    n = settings.normalize({"rhythm": "x", "framing": "4:3", "title_style": 3,
+                            "evolution": "zzz",
+                            "effects": {"slowmo": "non", "humor": 1, "inconnu": True}},
+                           "weekend")
+    assert n["rhythm"] == "dynamique"
+    assert n["framing"] == "16:9"
+    assert n["title_style"] == "carnet"
+    assert n["evolution"] == "montee"
+    assert n["effects"] == {"slowmo": True, "speedup": True, "freeze": True, "humor": True}
+    n = settings.normalize({"effects": "pas un dict"}, "mariage")
+    assert n["effects"]["humor"] is False
+
+
+def test_normalize_accepts_valid_new_values():
+    n = settings.normalize({"rhythm": "nerveux", "evolution": "constante", "title_style": "aucun",
+                            "framing": "9:16", "effects": {"slowmo": False, "humor": False}},
+                           "weekend")
+    assert (n["rhythm"], n["evolution"], n["title_style"], n["framing"]) == (
+        "nerveux", "constante", "aucun", "9:16")
+    assert n["effects"] == {"slowmo": False, "speedup": True, "freeze": True, "humor": False}
+
+
+def test_normalize_old_settings_still_valid():
+    old = {"ending": "epique", "genres": ["rock"], "energy": 2, "mix": 10,
+           "duration": 60, "subtitles": False}
+    n = settings.normalize(old, "weekend")
+    for k, v in old.items():
+        assert n[k] == v
+    assert n["rhythm"] == "dynamique" and n["framing"] == "16:9"
+
+
+def test_config_lists_exposed():
+    assert set(config.RHYTHMS) == {"pose", "dynamique", "nerveux"}
+    assert set(config.EFFECTS) == {"slowmo", "speedup", "freeze", "humor"}
+    assert set(config.TITLE_STYLES) == {"carnet", "sobre", "pop", "aucun"}
+    assert set(config.FRAMINGS) == {"16:9", "9:16", "1:1"}
+    assert set(config.EVOLUTIONS) == {"constante", "montee", "calme_explosion", "festif_emotion"}
+    for d in config.TYPE_DEFAULTS.values():
+        assert d["rhythm"] in config.RHYTHMS and d["evolution"] in config.EVOLUTIONS

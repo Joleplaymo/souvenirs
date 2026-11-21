@@ -62,6 +62,34 @@ GENRES = {
     "piano": "Piano",
     "orchestral": "Orchestral",
 }
+RHYTHMS = {
+    "pose": "Posé",
+    "dynamique": "Dynamique",
+    "nerveux": "Clip nerveux",
+}
+EFFECTS = {
+    "slowmo": "Ralentis",
+    "speedup": "Accélérés",
+    "freeze": "Arrêts sur image",
+    "humor": "Effets humoristiques",
+}
+TITLE_STYLES = {
+    "carnet": "Carnet manuscrit",
+    "sobre": "Sobre",
+    "pop": "Pop coloré",
+    "aucun": "Aucun",
+}
+FRAMINGS = {
+    "16:9": "Horizontal 16:9",
+    "9:16": "Vertical 9:16",
+    "1:1": "Carré 1:1",
+}
+EVOLUTIONS = {
+    "constante": "Constante",
+    "montee": "Montée progressive",
+    "calme_explosion": "Calme puis explosion",
+    "festif_emotion": "Festif puis émotion",
+}
 MOOD_LABELS = {
     "joyeux": "Joyeux",
     "festif": "Festif",

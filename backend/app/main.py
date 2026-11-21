@@ -135,6 +135,8 @@ def item_public(it, me_id=None, admin=False):
 @app.get("/api/config")
 def get_config():
     return {"types": config.EVENT_TYPES, "tones": config.TONES, "endings": config.ENDINGS, "genres": config.GENRES,
+            "rhythms": config.RHYTHMS, "effects": config.EFFECTS, "title_styles": config.TITLE_STYLES,
+            "framings": config.FRAMINGS, "evolutions": config.EVOLUTIONS,
             "durations": config.DURATIONS, "defaults": config.TYPE_DEFAULTS, "moods": config.MOOD_LABELS,
             "max_upload_mb": config.MAX_UPLOAD_MB}
 
