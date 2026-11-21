@@ -481,6 +481,10 @@ def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Heade
         err(409, "Une génération est déjà en cours.")
     if not parts:
         err(400, "Rien à générer.")
+    if parts == ["music"]:
+        problem = generate.remix_problem(ev["id"], db.report(ev["id"]))
+        if problem:
+            err(409, problem)
     if db.one("SELECT COUNT(*) c FROM items WHERE event_id=? AND status='processing'", ev["id"])["c"]:
         err(409, "Des fichiers sont encore en cours de préparation, réessaie dans un instant.")
     db.report(ev["id"])
@@ -560,6 +564,7 @@ def get_draft(slug: str, x_admin_token: str = Header(None)):
         "text_md": rep["text_md"], "selection": db.jl(rep["selection"], []),
         "items": [item_public(r, admin=True) for r in rows],
         "segments": segs, "video_ready": bool(rep["video_ready"]), "album_ready": bool(rep["album_ready"]),
+        "can_remix": generate.remix_problem(ev["id"], rep) is None,
         "album_pages": len(alb.get("pages", [])) + 2 if alb.get("pages") else 0,
         "video_duration": rep["video_duration"], "video_prompt": rep["video_prompt"] or "",
         "ai_mode": rep["ai_mode"], "updated_at": rep["updated_at"],
@@ -990,7 +995,7 @@ def music_file(track_id: int):
 async def add_music(request: Request, title: str = "", artist: str = "", genres: str = "", energy: str = "",
                     mood: str = "", license: str = "", x_admin_code: str = Header(None)):
     """Le fichier MP3 est le corps brut de la requête ; les informations passent dans l'URL."""
-    require_code(x_admin_code)
+    await asyncio.to_thread(require_code, x_admin_code)  # pause anti-essais hors de la boucle d'événements
     title, artist, license = title.strip()[:200], artist.strip()[:200], license.strip()[:300]
     gl = [g.strip() for g in genres.split(",") if g.strip()]
     if not title:
@@ -999,14 +1004,14 @@ async def add_music(request: Request, title: str = "", artist: str = "", genres:
         err(400, "Indique la licence du morceau : tu dois avoir le droit de l'utiliser dans une vidéo partagée.")
     if not gl or any(g not in config.GENRES for g in gl):
         err(400, "Choisis au moins un genre dans la liste.")
-    if not energy.isdigit() or not 1 <= int(energy) <= 5:
+    if not energy.isdecimal() or not 1 <= int(energy) <= 5:
         err(400, "L'énergie doit être un nombre de 1 à 5.")
     if mood not in config.MOODS:
         err(400, "Choisis une humeur dans la liste.")
     limit = MAX_MUSIC_MB * 1024 * 1024
     too_big = f"Fichier trop volumineux (maximum {MAX_MUSIC_MB} Mo)."
     declared = request.headers.get("content-length") or "0"
-    if declared.isdigit() and int(declared) > limit:
+    if declared.isdecimal() and int(declared) > limit:
         err(413, too_big)
     d = config.DATA_DIR / "music" / "uploads"
     d.mkdir(parents=True, exist_ok=True)

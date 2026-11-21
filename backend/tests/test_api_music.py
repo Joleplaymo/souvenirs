@@ -90,7 +90,7 @@ def test_upload_rejects_too_big_while_streaming():
 
 
 @pytest.mark.parametrize("over", [{"title": " "}, {"license": ""}, {"genres": ""}, {"genres": "pop,nimportequoi"},
-                                  {"energy": "9"}, {"energy": "x"}, {"mood": "furieux"}])
+                                  {"energy": "9"}, {"energy": "x"}, {"energy": "²"}, {"mood": "furieux"}])
 def test_upload_rejects_bad_metadata(mp3, over):
     n, files = _count(), _files()
     r = _post(mp3, **over)

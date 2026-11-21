@@ -47,14 +47,25 @@ def path(track: dict) -> Path | None:
     return p if p.is_file() else None
 
 
+def usable(track: dict | None) -> bool:
+    """Morceau jouable : fichier présent, et pas marqué illisible (durée 0) par la synchronisation."""
+    if not track or path(track) is None:
+        return False
+    return not (track.get("origin") == "library" and track.get("duration") is not None and track["duration"] <= 0)
+
+
 def library_dir() -> Path:
     """Dossier où sont téléchargés les morceaux de la bibliothèque (volume de données)."""
     return config.DATA_DIR / "music" / "library"
 
 
-def fetch_missing(dest=None, delay: float = 1.0, opener=None) -> dict:
+MIN_MP3_BYTES = 100 * 1024  # en dessous : page d'erreur ou fichier tronqué, pas un morceau
+
+
+def fetch_missing(dest=None, delay: float = 1.0, opener=None, min_size: int = MIN_MP3_BYTES) -> dict:
     """Télécharge les morceaux du catalogue (entrées avec mp3_url) absents de dest.
-    Écriture atomique, une pause entre deux téléchargements, un échec est journalisé et n'arrête rien."""
+    Écriture atomique, une pause entre deux téléchargements, un échec est journalisé et n'arrête rien.
+    Un fichier trop petit ou sans piste audio lisible (page HTML, téléchargement tronqué) est refusé."""
     dest = Path(dest) if dest else library_dir()
     opener = opener or urllib.request.urlopen
     res = {"ok": 0, "skipped": 0, "failed": 0}
@@ -79,9 +90,13 @@ def fetch_missing(dest=None, delay: float = 1.0, opener=None) -> dict:
             req = urllib.request.Request(url, headers={"User-Agent": "souvenirs-app"})
             with opener(req, timeout=60) as r:
                 data = r.read()
-            if not data:
-                raise ValueError("fichier vide")
+            if len(data) < min_size:
+                raise ValueError(f"fichier trop petit ({len(data)} octets)")
             tmp.write_bytes(data)
+            from . import media
+
+            if not media.probe(tmp)["has_audio"]:
+                raise ValueError("aucune piste audio lisible")
             os.replace(tmp, target)
             res["ok"] += 1
         except Exception as ex:
@@ -121,18 +136,20 @@ def sync_catalogue() -> int:
             db.insert("tracks", key=e["key"], origin="library", created_at=db.now(), **vals)
         elif row["origin"] == "library":
             db.update("tracks", "id", row["id"], **vals)
-    for t in db.q("SELECT id, file FROM tracks WHERE origin='library' AND duration IS NULL"):
+    # durée des morceaux présents ; un fichier illisible est marqué durée 0 (écarté du choix, resondé au démarrage)
+    for t in db.q("SELECT id, file, origin FROM tracks WHERE origin='library' AND (duration IS NULL OR duration <= 0)"):
         p = path(dict(t))
         if p is None:
             continue
+        d = None
         try:
             from . import media
 
-            d = media.probe(p)["duration"]
-            if d:
-                db.update("tracks", "id", t["id"], duration=d)
+            info = media.probe(p)
+            d = info["duration"] if info["has_audio"] else None
         except Exception:
-            log.warning("durée illisible pour %s", p, exc_info=True)
+            log.warning("morceau illisible : %s", p, exc_info=True)
+        db.update("tracks", "id", t["id"], duration=d if d else 0)
     return len(entries)
 
 
@@ -152,7 +169,7 @@ def candidates(tones: list[str], settings: dict, final: bool = False, exclude=()
     ending = settings.get("ending")
     pool = []
     for t in all_tracks():
-        if t["id"] in exclude or path(t) is None or not allowed(t, tones, final, ending):
+        if t["id"] in exclude or not usable(t) or not allowed(t, tones, final, ending):
             continue
         pool.append((abs(t["energy"] - target), -len(wanted & set(t["genres"])), t["id"], t))
     pool.sort(key=lambda x: x[:3])
@@ -171,7 +188,7 @@ def choose(tones: list[str], settings: dict, exclude=()) -> dict:
         wanted = set(settings.get("genres") or [])
         best = None
         for t in all_tracks():
-            if (t["id"] in exclude or (main and t["id"] == main["id"]) or path(t) is None
+            if (t["id"] in exclude or (main and t["id"] == main["id"]) or not usable(t)
                     or t["mood"] not in FINAL_MOODS or t["energy"] > 2
                     or not allowed(t, tones, True, "touchante")):
                 continue

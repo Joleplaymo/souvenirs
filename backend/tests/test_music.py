@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -13,15 +15,24 @@ def entry(key, mood, genres, energy, **kw):
     return d
 
 
+@pytest.fixture(scope="module")
+def tiny_mp3(tmp_path_factory):
+    """Vrai MP3 d'une seconde (les morceaux illisibles sont écartés du choix)."""
+    f = tmp_path_factory.mktemp("tiny") / "tiny.mp3"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                    str(f)], check=True)
+    return f
+
+
 @pytest.fixture
-def lib(tmp_path, monkeypatch):
+def lib(tmp_path, monkeypatch, tiny_mp3):
     monkeypatch.setattr(config, "MUSIC_DIR", tmp_path)
     db.init()
     db.run("DELETE FROM tracks")
 
     def make(entries):
         for e in entries:
-            (tmp_path / e["file"]).write_bytes(b"x")
+            shutil.copy(tiny_mp3, tmp_path / e["file"])
         (tmp_path / "catalogue.json").write_text(json.dumps(entries), encoding="utf-8")
         return music.sync_catalogue()
 
@@ -75,6 +86,21 @@ def test_exclude_gives_next(lib):
     c = music.candidates(["drole"], st)
     assert len(c) == 2
     assert music.candidates(["drole"], st, exclude=[c[0]["id"]])[0]["id"] == c[1]["id"]
+
+
+def test_unreadable_library_file_is_never_chosen(lib, tmp_path):
+    lib([entry("casse", "joyeux", ["funk"], 4), JOYEUX])
+    (tmp_path / "casse.mp3").write_bytes(b"<html>erreur</html>")
+    db.run("UPDATE tracks SET duration=NULL")
+    music.sync_catalogue()
+    casse = music.get_by_key("casse")
+    assert casse["duration"] == 0 and not music.usable(casse)
+    assert music.usable(music.get_by_key("joyeux-funk"))
+    assert [t["key"] for t in music.candidates(["drole"], settings.defaults("weekend"))] == ["joyeux-funk"]
+    # fichier réparé : de nouveau sondé et choisi au démarrage suivant
+    shutil.copy(tmp_path / "joyeux-funk.mp3", tmp_path / "casse.mp3")
+    music.sync_catalogue()
+    assert music.usable(music.get_by_key("casse"))
 
 
 def test_sync_keeps_uploads(lib):
@@ -141,31 +167,39 @@ class FakeResp:
         return False
 
 
-def test_fetch_missing(tmp_path, monkeypatch):
+def test_fetch_missing(tmp_path, monkeypatch, tiny_mp3):
     src = tmp_path / "src"
     src.mkdir()
     monkeypatch.setattr(config, "MUSIC_DIR", src)
-    entries = [entry(k, "joyeux", ["pop"], 3, mp3_url=f"https://incompetech.com/{k}.mp3") for k in ("a", "b", "c")]
+    entries = [entry(k, "joyeux", ["pop"], 3, mp3_url=f"https://incompetech.com/{k}.mp3")
+               for k in ("a", "b", "c", "html", "petit")]
     entries.append(entry("local", "joyeux", ["pop"], 3))  # sans mp3_url : ignoré
     (src / "catalogue.json").write_text(json.dumps(entries), encoding="utf-8")
     dest = tmp_path / "lib"
     dest.mkdir()
     (dest / "a.mp3").write_bytes(b"old")
     seen = []
+    good = tiny_mp3.read_bytes()
 
     def opener(req, timeout=None):
         seen.append((req.full_url, req.get_header("User-agent")))
         if req.full_url.endswith("/c.mp3"):
             raise OSError("réseau coupé")
-        return FakeResp(b"mp3data")
+        if req.full_url.endswith("/html.mp3"):  # page d'erreur servie avec un code 200
+            return FakeResp(b"<html>" + b" " * len(good) + b"</html>")
+        if req.full_url.endswith("/petit.mp3"):
+            return FakeResp(good[:100])
+        return FakeResp(good)
 
-    res = music.fetch_missing(dest=dest, delay=0, opener=opener)
-    assert res == {"ok": 1, "skipped": 1, "failed": 1}
+    # seuil abaissé : le MP3 de test ne fait que quelques kilo-octets
+    res = music.fetch_missing(dest=dest, delay=0, opener=opener, min_size=len(good) // 2)
+    assert res == {"ok": 1, "skipped": 1, "failed": 3}
     assert (dest / "a.mp3").read_bytes() == b"old"
-    assert (dest / "b.mp3").read_bytes() == b"mp3data"
-    assert not (dest / "c.mp3").exists()
+    assert (dest / "b.mp3").read_bytes() == good
+    for k in ("c", "html", "petit"):
+        assert not (dest / f"{k}.mp3").exists()
     assert sorted(p.name for p in dest.iterdir()) == ["a.mp3", "b.mp3"]  # aucun fichier temporaire
-    assert [u for u, _ in seen] == ["https://incompetech.com/b.mp3", "https://incompetech.com/c.mp3"]
+    assert [u for u, _ in seen] == [f"https://incompetech.com/{k}.mp3" for k in ("b", "c", "html", "petit")]
     assert all(ua == "souvenirs-app" for _, ua in seen)
 
 
@@ -180,3 +214,12 @@ def test_path_prefers_library_dir(tmp_path, monkeypatch):
     assert music.path(t) == tmp_path / "m" / "x.mp3"
     (tmp_path / "d" / "music" / "library" / "x.mp3").write_bytes(b"2")
     assert music.path(t) == tmp_path / "d" / "music" / "library" / "x.mp3"
+
+
+def test_fetch_missing_default_threshold_rejects_small_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "MUSIC_DIR", tmp_path)
+    (tmp_path / "catalogue.json").write_text(json.dumps(
+        [entry("a", "joyeux", ["pop"], 3, mp3_url="https://incompetech.com/a.mp3")]), encoding="utf-8")
+    res = music.fetch_missing(dest=tmp_path / "lib", delay=0, opener=lambda req, timeout=None: FakeResp(b"mp3data"))
+    assert res == {"ok": 0, "skipped": 0, "failed": 1}
+    assert list((tmp_path / "lib").iterdir()) == []

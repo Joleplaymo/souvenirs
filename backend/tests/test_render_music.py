@@ -203,6 +203,44 @@ def test_touchante_stores_final_track(lib):
     assert (draft(ev) / "video.mp4").is_file()
 
 
+def test_final_track_without_final_sequence_is_dropped(lib, monkeypatch):
+    """Pas de carton de séquence finale : le morceau final n'est ni joué, ni crédité, ni enregistré."""
+    final_credit = CREDIT.replace("Carefree", "Doux")
+    ids = lib([entry("gai"), entry("doux", mood="calme", genres=("piano",), energy=1, src="c.mp3",
+                                    credit=final_credit)])
+    ev = make_event()
+    item = db.one("SELECT * FROM items WHERE event_id=?", ev["id"])
+    db.update("reports", "event_id", ev["id"],
+              video_settings=json.dumps({**settings.defaults("weekend"), "ending": "touchante"}),
+              montage=json.dumps([{"type": "title", "item_id": 0, "text": "Week-end", "duration": 2.0},
+                                  {"type": "photo", "item_id": item["id"], "text": "", "duration": 2.0}]))
+    calls = spy_titles(monkeypatch)
+    run_job(ev, parts=["video"], ai=False)
+    assert stored_music(ev) == {"main_id": ids["gai"], "final_id": None}
+    assert not any("Doux" in c for c in calls)
+    assert video.read_meta(draft(ev) / video.BASE)["credits"] == []
+    # « Changer la musique » ne le réintroduit pas non plus
+    db.update("reports", "event_id", ev["id"], music=json.dumps({"main_id": ids["gai"], "final_id": ids["doux"]}))
+    generate.remix(db.one("SELECT * FROM events WHERE id=?", ev["id"]), noop)
+    assert stored_music(ev) == {"main_id": ids["gai"], "final_id": None}
+    assert video.read_meta(draft(ev) / video.BASE)["credits"] == []
+
+
+def test_subtitles_off_clears_quotes_but_keeps_titles(lib, monkeypatch):
+    lib([entry("a")])
+    ev = make_event()
+    item = db.one("SELECT * FROM items WHERE event_id=?", ev["id"])
+    plan = {"segments": [{"type": "title", "item_id": 0, "text": "Samedi", "duration": 2.5},
+                         {"type": "photo", "item_id": item["id"], "text": "« On y est ! » — Léa", "duration": 3}]}
+    monkeypatch.setattr(generate.ai, "plan_montage", lambda *a, **k: json.loads(json.dumps(plan)))
+    for on, quote in ((True, "« On y est ! » — Léa"), (False, "")):
+        db.update("reports", "event_id", ev["id"],
+                  video_settings=json.dumps({**settings.defaults("weekend"), "subtitles": on}))
+        run_job(ev, parts=["video"])
+        segs = json.loads(db.report(ev["id"])["montage"])
+        assert [s["text"] for s in segs] == ["Samedi", quote]
+
+
 def test_legacy_report_without_settings_generates(lib):
     """Données d'avant cette PR : ton et type anciens migrés, video_settings et music à NULL."""
     lib([entry("a")])
@@ -280,6 +318,35 @@ def test_remix_without_base_errors(lib):
     jid = db.enqueue(ev["id"], "generate", parts=["music"], ai=True)
     with pytest.raises(RuntimeError, match=re.escape(NO_BASE)):
         generate.generate(db.one("SELECT * FROM jobs WHERE id=?", jid))
+
+
+def test_remix_refused_when_film_is_stale(lib):
+    lib([entry("a")])
+    ev = make_event()
+    adm = {"x-admin-token": ev["admin_token"]}
+    assert client.get(f"/api/events/{ev['slug']}/draft", headers=adm).json()["can_remix"] is False
+    r = client.post(f"/api/events/{ev['slug']}/generate", json={"parts": ["music"]}, headers=adm)
+    assert r.status_code == 409 and r.json()["detail"] == NO_BASE
+    run_job(ev, parts=["video"])
+    assert client.get(f"/api/events/{ev['slug']}/draft", headers=adm).json()["can_remix"] is True
+    db.update("reports", "event_id", ev["id"], video_ready=0)  # montage changé, film pas encore refait
+    assert client.get(f"/api/events/{ev['slug']}/draft", headers=adm).json()["can_remix"] is False
+    with pytest.raises(RuntimeError, match=re.escape(generate.STALE_BASE)):
+        generate.remix(db.one("SELECT * FROM events WHERE id=?", ev["id"]), noop)
+    r = client.post(f"/api/events/{ev['slug']}/generate", json={"parts": ["music"]}, headers=adm)
+    assert r.status_code == 409 and r.json()["detail"] == generate.STALE_BASE
+
+
+def test_remix_version_label(lib):
+    ids = lib([entry("a"), entry("b", src="b.mp3")])
+    ev = make_event()
+    run_job(ev, parts=["video"])
+    first = db.one("SELECT label FROM versions WHERE id=?", db.report(ev["id"])["current_version"])["label"]
+    assert "musique changée" not in first
+    db.update("reports", "event_id", ev["id"], music=json.dumps({"main_id": ids["b"], "final_id": None}))
+    run_job(ev, parts=["music"])
+    label = db.one("SELECT label FROM versions WHERE id=?", db.report(ev["id"])["current_version"])["label"]
+    assert label == first + " · musique changée"
 
 
 # ------------------------------------------------------------------ versions

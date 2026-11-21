@@ -191,6 +191,11 @@ def credit_lines(credits) -> list[str]:
     return seen
 
 
+def final_fits(final_from, body) -> bool:
+    """Le morceau final a-t-il une séquence finale assez longue (2 s de fondu au moins avant la fin du film) ?"""
+    return final_from is not None and body is not None and 0 < final_from < body - 2
+
+
 def credit_segment(credits: list[str]) -> dict:
     """Carton final « Musique » + une ligne par morceau (le préfixe « Musique : » est porté par l'en-tête)."""
     lines = [re.sub(r"^Musique\s*:\s*", "", c) for c in credits]
@@ -235,6 +240,8 @@ def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, on_
                 on_progress((i + 1) / (len(segs) + 1))
         if not files:
             raise RuntimeError("Aucun extrait n'a pu être monté.")
+        if tracks.get("final") and not final_fits(final_from, t):  # morceau final ni joué ni crédité
+            tracks = {**tracks, "final": None, "credits": tracks.get("main_credits", tracks.get("credits"))}
         credits = credit_lines(tracks.get("credits"))
         if credits:
             files.append(_render_segment(credit_segment(credits), None, tmp, len(segs)))

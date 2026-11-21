@@ -78,6 +78,17 @@ def _people(event_id):
 
 
 NO_BASE = "Ce film date d'avant le choix des musiques : régénère le film une fois."
+STALE_BASE = "Le film n'est plus à jour : régénère-le avant de changer la musique."
+
+
+def remix_problem(event_id: int, rep) -> str | None:
+    """Pourquoi « Changer la musique » est impossible (message), ou None si le film monté peut être remixé."""
+    base = out_dir(event_id) / video.BASE
+    if not base.is_file() or video.read_meta(base) is None:
+        return NO_BASE
+    if not rep["video_ready"]:
+        return STALE_BASE
+    return None
 
 
 def video_settings(ev, rep) -> dict:
@@ -103,7 +114,7 @@ def stored_tracks(rep) -> dict:
     found = {}
     for k in ("main", "final"):
         t = music.get(ids[f"{k}_id"]) if ids[f"{k}_id"] is not None else None
-        found[k] = t if t and music.path(t) else None
+        found[k] = t if music.usable(t) else None
     return found
 
 
@@ -128,10 +139,15 @@ def pick_tracks(ev, rep, st) -> dict:
     return {"main": main, "final": final}
 
 
+def _credits(*tracks) -> list[str]:
+    return [t["credit"] for t in tracks if t and (t["credit"] or "").strip()]
+
+
 def _tracks(chosen) -> dict:
+    """Fichiers et crédits pour video.render / mix_music ; main_credits sert si le morceau final ne passe pas."""
     main, final = chosen["main"], chosen["final"]
     return {"main": music.path(main) if main else None, "final": music.path(final) if final else None,
-            "credits": [t["credit"] for t in (main, final) if t and (t["credit"] or "").strip()]}
+            "credits": _credits(main, final), "main_credits": _credits(main)}
 
 
 def render_video(ev, rep, prog, lo, hi):
@@ -140,10 +156,14 @@ def render_video(ev, rep, prog, lo, hi):
     while segs and segs[-1]["type"] == "title":
         segs.pop()
     st = video_settings(ev, rep)
-    tracks = _tracks(pick_tracks(ev, rep, st))
+    chosen = pick_tracks(ev, rep, st)
     out = out_dir(ev["id"]) / "video.mp4"
-    video.render(segs, items, out, tracks, st["mix"],
+    video.render(segs, items, out, _tracks(chosen), st["mix"],
                  lambda f: prog("montage", lo + (hi - lo) * f, "Montage de la vidéo"))
+    meta = video.read_meta(out.parent / video.BASE) or {}
+    if chosen["final"] and not video.final_fits(meta.get("final_from"), meta.get("body")):
+        # pas de séquence finale assez longue : le morceau final n'a été ni joué ni crédité
+        store_music(ev["id"], chosen["main"]["id"] if chosen["main"] else None, None)
     db.update("reports", "event_id", ev["id"], video_ready=1, montage=json.dumps(segs, ensure_ascii=False))
 
 
@@ -151,13 +171,18 @@ def remix(ev, prog):
     """« Changer la musique » : refait seulement le mélange à partir de video_base.mp4 (ni IA ni montage)."""
     d = out_dir(ev["id"])
     base = d / video.BASE
-    meta = video.read_meta(base) if base.is_file() else None
-    if meta is None:
-        raise RuntimeError(NO_BASE)
-    prog("musique", 0.2, "Changement de la musique")
     rep = db.report(ev["id"])
+    problem = remix_problem(ev["id"], rep)
+    if problem:
+        raise RuntimeError(problem)
+    meta = video.read_meta(base)
+    prog("musique", 0.2, "Changement de la musique")
     st = video_settings(ev, rep)
-    tracks = _tracks(pick_tracks(ev, rep, st))
+    chosen = pick_tracks(ev, rep, st)
+    if chosen["final"] and not video.final_fits(meta.get("final_from"), meta.get("body")):
+        chosen = {**chosen, "final": None}  # pas de séquence finale assez longue : ni jouée ni créditée
+        store_music(ev["id"], chosen["main"]["id"] if chosen["main"] else None, None)
+    tracks = _tracks(chosen)
     video.recredit(base, tracks["credits"])
     prog("musique", 0.6, "Mélange de la musique")
     video.mix_music(base, d / "video.mp4", tracks, st["mix"], meta.get("final_from"))
@@ -213,6 +238,10 @@ def generate(job):
             prog("montage", 0.6, "Choix des meilleurs moments")
             plan = ai.plan_montage(ev, report_md, items, target, rep["video_prompt"] or "", video_settings(ev, rep))
             segs = video.normalize(plan, by_id, target)
+            if not video_settings(ev, rep)["subtitles"]:  # sous-titres désactivés : seuls les cartons gardent du texte
+                for s in segs:
+                    if s["type"] in ("photo", "video"):
+                        s["text"] = ""
             db.update("reports", "event_id", ev["id"], montage=json.dumps(segs, ensure_ascii=False), video_ready=0)
         if "album" in parts:
             prog("album", 0.62 if "video" not in parts else 0.61, "Sélection des photos de l'album")
@@ -233,7 +262,7 @@ def generate(job):
     if use_ai:  # chaque génération devient une version, pour comparer les tons et revenir en arrière
         from . import versions
 
-        versions.snapshot(ev["id"], origin="generation")
+        versions.snapshot(ev["id"], origin="generation", suffix=" · musique changée" if only_music else "")
     prog("termine", 1.0, "Terminé")
 
 
