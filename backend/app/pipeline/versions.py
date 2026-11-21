@@ -3,7 +3,7 @@ album, film et PDF rendus) pour comparer plusieurs tons et reprendre l'une d'ell
 import shutil
 
 from .. import config, db
-from . import generate
+from . import generate, settings
 
 FILES = ("video.mp4", "album.pdf")
 FIELDS = ("text_md", "selection", "montage", "album")
@@ -35,7 +35,7 @@ def snapshot(event_id: int, label: str = "", origin: str = "manual", suffix: str
     tone, typ = (src["tone"], src["type"]) if src and origin != "generation" else (ev["tone"], ev["type"])
     draft = generate.out_dir(event_id)
     has = {n: bool(rep["video_ready" if n == "video.mp4" else "album_ready"]) and (draft / n).exists() for n in FILES}
-    vid = db.insert("versions", event_id=event_id, label=(label or config.TONES.get(tone, tone) + suffix)[:80],
+    vid = db.insert("versions", event_id=event_id, label=(label or settings.tones_label(tone) + suffix)[:80],
                     tone=tone, type=typ, origin=origin, created_at=db.now(),
                     text_md=rep["text_md"], selection=rep["selection"], montage=rep["montage"], album=rep["album"],
                     video_duration=rep["video_duration"], ai_mode=rep["ai_mode"], video_prompt=rep["video_prompt"],

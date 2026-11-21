@@ -16,7 +16,7 @@ from starlette.requests import ClientDisconnect
 
 from . import config, db
 from .pipeline import album as album_mod
-from .pipeline import generate, media
+from .pipeline import generate, media, settings
 from .pipeline import versions as versions_mod
 
 app = FastAPI(title="Souvenirs", docs_url=None, redoc_url=None, openapi_url=None)
@@ -76,6 +76,20 @@ def require_code(code):
         err(403, "Code administrateur incorrect.")
 
 
+def _tones(value) -> list[str]:
+    try:
+        return settings.parse_tones(value)
+    except ValueError:
+        return []
+
+
+def _tone_label(value) -> str:
+    try:
+        return settings.tones_label(value)
+    except ValueError:
+        return str(value or "")
+
+
 def event_public(ev, is_admin=False):
     n = db.one("SELECT COUNT(*) c FROM items WHERE event_id=?", ev["id"])["c"]
     today = datetime.now(ZoneInfo(ev["tz"])).date()
@@ -87,7 +101,7 @@ def event_public(ev, is_admin=False):
     return {
         "slug": ev["slug"], "name": ev["name"], "tz": ev["tz"], "start_date": ev["start_date"], "end_date": ev["end_date"],
         "type": ev["type"], "type_label": config.EVENT_TYPES.get(ev["type"], ev["type"]),
-        "tone": ev["tone"], "tone_label": config.TONES.get(ev["tone"], ev["tone"]),
+        "tone": ev["tone"], "tones": _tones(ev["tone"]), "tone_label": _tone_label(ev["tone"]),
         "count": n, "day": (today - start).days + 1, "days": (end - start).days + 1,
         "phase": "avant" if today < start else "apres" if today > end else "pendant",
         "published": bool(ev["published_at"]), "is_admin": is_admin, "is_demo": bool(ev["is_demo"]),
@@ -111,7 +125,8 @@ def item_public(it, me_id=None, admin=False):
 
 @app.get("/api/config")
 def get_config():
-    return {"types": config.EVENT_TYPES, "tones": config.TONES, "max_upload_mb": config.MAX_UPLOAD_MB}
+    return {"types": config.EVENT_TYPES, "tones": config.TONES, "endings": config.ENDINGS, "genres": config.GENRES,
+            "durations": config.DURATIONS, "defaults": config.TYPE_DEFAULTS, "max_upload_mb": config.MAX_UPLOAD_MB}
 
 
 def _settings(body: dict) -> dict:
@@ -128,9 +143,15 @@ def _settings(body: dict) -> dict:
         err(400, "Fuseau horaire inconnu.")
     if not name or end < start:
         err(400, "Donne un nom, et une date de fin après la date de début.")
-    if body.get("type") not in config.EVENT_TYPES or body.get("tone") not in config.TONES:
-        err(400, "Type ou ton inconnu.")
-    return {"name": name, "start_date": str(start), "end_date": str(end), "type": body["type"], "tone": body["tone"], "tz": tz}
+    typ = config.LEGACY_TYPES.get(body.get("type"), body.get("type"))
+    if typ not in config.EVENT_TYPES:
+        err(400, "Type inconnu.")
+    try:
+        tones = settings.parse_tones(body.get("tone"))
+    except ValueError as e:
+        err(400, str(e))
+    return {"name": name, "start_date": str(start), "end_date": str(end), "type": typ,
+            "tone": settings.tones_csv(tones), "tz": tz}
 
 
 @app.post("/api/events")
@@ -558,7 +579,7 @@ def set_item_time(slug: str, item_id: int, body: dict = Body(...), x_admin_token
 
 
 def _version_public(v, rep):
-    return {"id": v["id"], "label": v["label"], "tone": v["tone"], "tone_label": config.TONES.get(v["tone"], v["tone"]),
+    return {"id": v["id"], "label": v["label"], "tone": v["tone"], "tone_label": _tone_label(v["tone"]),
             "type_label": config.EVENT_TYPES.get(v["type"], v["type"]), "origin": v["origin"],
             "created_at": v["created_at"], "has_video": bool(v["has_video"]), "has_album": bool(v["has_album"]),
             "current": v["id"] == rep["current_version"], "published": v["id"] == rep["published_from"],
@@ -723,10 +744,10 @@ def published(slug: str):
     rep = db.report(ev["id"])
     main_v = db.one("SELECT label, tone FROM versions WHERE id=?", rep["published_from"]) if rep["published_from"] else None
     options = [{"id": 0, "label": main_v["label"] if main_v else "Version principale",
-                "tone_label": config.TONES.get(main_v["tone"] if main_v else ev["tone"], ""), "main": True}]
+                "tone_label": _tone_label(main_v["tone"] if main_v else ev["tone"]), "main": True}]
     for v in db.q("SELECT id, label, tone FROM versions WHERE event_id=? AND shared=1 AND id IS NOT ? ORDER BY id",
                   ev["id"], rep["published_from"]):
-        options.append({"id": v["id"], "label": v["label"], "tone_label": config.TONES.get(v["tone"], v["tone"]), "main": False})
+        options.append({"id": v["id"], "label": v["label"], "tone_label": _tone_label(v["tone"]), "main": False})
     return {"published": True, "text_md": rep["pub_text_md"], "photos": db.jl(rep["pub_selection"], []),
             "has_video": bool(rep["pub_has_video"]), "has_album": bool(rep["pub_has_album"]),
             "version": rep["pub_version"], "published_at": ev["published_at"], "versions": options}
@@ -750,7 +771,7 @@ def published_version(slug: str, vid: int):
     ok = {r["id"] for r in db.q(f"SELECT id FROM items WHERE event_id=? AND kind='photo' AND status='ready' AND excluded=0 "
                                 f"AND id IN ({','.join('?' * len(ids)) or 'NULL'})", ev["id"], *ids)} if ids else set()
     d = versions_mod.vdir(ev["id"], vid)
-    return {"id": v["id"], "label": v["label"], "tone_label": config.TONES.get(v["tone"], v["tone"]),
+    return {"id": v["id"], "label": v["label"], "tone_label": _tone_label(v["tone"]),
             "text_md": v["text_md"], "photos": [i for i in ids if i in ok and media.derived(ev["id"], i, "d").exists()],
             "has_video": (d / "video.mp4").exists(), "has_album": (d / "album.pdf").exists()}
 

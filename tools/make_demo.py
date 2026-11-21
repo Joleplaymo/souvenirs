@@ -236,6 +236,6 @@ if __name__ == "__main__":
     add(1, "15:10", "Tom", "dictee", "19-fin.m4a")
     add(1, "15:20", "Max", "note", text="Promis, l'an prochain je prends le pain.")
     (OUT / "manifest.json").write_text(json.dumps({
-        "name": "Week-end entre copains", "type": "weekend", "tone": "detendu", "days": 2,
+        "name": "Week-end entre copains", "type": "weekend", "tone": "drole,festif", "days": 2,
         "participants": list(VOICES), "items": ITEMS}, ensure_ascii=False, indent=1))
     print(len(ITEMS), "éléments")

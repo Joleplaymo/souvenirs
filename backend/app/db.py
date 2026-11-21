@@ -38,14 +38,16 @@ CREATE TABLE IF NOT EXISTS reports (
   montage TEXT, album TEXT, video_ready INTEGER DEFAULT 0, album_ready INTEGER DEFAULT 0,
   video_duration INTEGER DEFAULT 120, ai_mode TEXT, updated_at TEXT,
   pub_text_md TEXT, pub_selection TEXT, pub_has_video INTEGER DEFAULT 0, pub_has_album INTEGER DEFAULT 0,
-  pub_version INTEGER DEFAULT 0, current_version INTEGER, published_from INTEGER, video_prompt TEXT
+  pub_version INTEGER DEFAULT 0, current_version INTEGER, published_from INTEGER, video_prompt TEXT,
+  video_settings TEXT, music TEXT
 );
 CREATE TABLE IF NOT EXISTS versions (
   id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, label TEXT NOT NULL, tone TEXT NOT NULL, type TEXT NOT NULL,
   origin TEXT DEFAULT 'manual', created_at TEXT NOT NULL,
   text_md TEXT DEFAULT '', selection TEXT DEFAULT '[]', montage TEXT, album TEXT,
   video_duration INTEGER, ai_mode TEXT, has_video INTEGER DEFAULT 0, has_album INTEGER DEFAULT 0,
-  shared INTEGER DEFAULT 0, video_prompt TEXT
+  shared INTEGER DEFAULT 0, video_prompt TEXT,
+  video_settings TEXT, music TEXT
 );
 CREATE INDEX IF NOT EXISTS versions_event ON versions(event_id, id);
 CREATE TABLE IF NOT EXISTS jobs (
@@ -79,6 +81,10 @@ MIGRATIONS = [
     ("reports", "video_prompt", "TEXT"),
     ("versions", "shared", "INTEGER DEFAULT 0"),
     ("versions", "video_prompt", "TEXT"),
+    ("reports", "video_settings", "TEXT"),
+    ("reports", "music", "TEXT"),
+    ("versions", "video_settings", "TEXT"),
+    ("versions", "music", "TEXT"),
 ]
 
 
@@ -89,6 +95,21 @@ def init():
         if cols and col not in cols:
             c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     c.executescript(SCHEMA)
+    migrate_values()
+
+
+def migrate_values():
+    """Convertit les anciens types et tons (événements et versions) vers les nouvelles clés. Idempotent."""
+    from .pipeline import settings  # import tardif : settings dépend de config seulement
+    c = conn()
+    for table in ("events", "versions"):
+        for r in c.execute(f"SELECT id, type, tone FROM {table}").fetchall():
+            typ = config.LEGACY_TYPES.get(r["type"], r["type"])
+            tone = r["tone"]
+            if tone in config.LEGACY_TONES:
+                tone = settings.tones_csv(config.LEGACY_TONES[tone])
+            if (typ, tone) != (r["type"], r["tone"]):
+                c.execute(f"UPDATE {table} SET type=?, tone=? WHERE id=?", (typ, tone, r["id"]))
 
 
 def q(sql, *args):
