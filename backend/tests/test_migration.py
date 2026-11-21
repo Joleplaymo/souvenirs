@@ -1,8 +1,12 @@
+import itertools
+
 from app import db
+
+_n = itertools.count()
 
 
 def _event(**kw):
-    vals = dict(slug="s-" + kw.get("name", "x"), admin_token="t", name="x", start_date="2026-01-01",
+    vals = dict(slug=f"mig-{next(_n)}", admin_token="t", name="x", start_date="2026-01-01",
                 end_date="2026-01-02", type="voyage", tone="detendu", tz="Europe/Paris", created_at=db.now())
     vals.update(kw)
     return db.insert("events", **vals)

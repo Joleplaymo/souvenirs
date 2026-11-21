@@ -1,6 +1,7 @@
 """API HTTP + service de l'interface (PWA)."""
 import hmac
 import json
+import logging
 import mimetypes
 import re
 import secrets
@@ -19,6 +20,7 @@ from .pipeline import album as album_mod
 from .pipeline import generate, media, settings
 from .pipeline import versions as versions_mod
 
+log = logging.getLogger("souvenirs")
 app = FastAPI(title="Souvenirs", docs_url=None, redoc_url=None, openapi_url=None)
 db.init()
 
@@ -76,18 +78,18 @@ def require_code(code):
         err(403, "Code administrateur incorrect.")
 
 
-def _tones(value) -> list[str]:
+def _tones(value, event_type: str | None = None) -> list[str]:
+    """Tons d'une valeur stockée ; jamais vide : une valeur corrompue retombe sur les tons par défaut du type."""
     try:
         return settings.parse_tones(value)
-    except ValueError:
-        return []
+    except ValueError as e:
+        fallback = settings.defaults(event_type or "autre")["tones"] or ["chill"]
+        log.warning("Ton invalide en base (%r) : %s. Repli sur %s.", value, e, fallback)
+        return fallback
 
 
-def _tone_label(value) -> str:
-    try:
-        return settings.tones_label(value)
-    except ValueError:
-        return str(value or "")
+def _tone_label(value, event_type: str | None = None) -> str:
+    return " + ".join(config.TONES[t] for t in _tones(value, event_type))
 
 
 def event_public(ev, is_admin=False):
@@ -101,7 +103,7 @@ def event_public(ev, is_admin=False):
     return {
         "slug": ev["slug"], "name": ev["name"], "tz": ev["tz"], "start_date": ev["start_date"], "end_date": ev["end_date"],
         "type": ev["type"], "type_label": config.EVENT_TYPES.get(ev["type"], ev["type"]),
-        "tone": ev["tone"], "tones": _tones(ev["tone"]), "tone_label": _tone_label(ev["tone"]),
+        "tone": ev["tone"], "tones": _tones(ev["tone"], ev["type"]), "tone_label": _tone_label(ev["tone"], ev["type"]),
         "count": n, "day": (today - start).days + 1, "days": (end - start).days + 1,
         "phase": "avant" if today < start else "apres" if today > end else "pendant",
         "published": bool(ev["published_at"]), "is_admin": is_admin, "is_demo": bool(ev["is_demo"]),

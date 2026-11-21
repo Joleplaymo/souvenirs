@@ -5,6 +5,7 @@ import threading
 from datetime import datetime, timezone
 
 from . import config
+from .pipeline import settings
 
 _local = threading.local()
 
@@ -100,7 +101,6 @@ def init():
 
 def migrate_values():
     """Convertit les anciens types et tons (événements et versions) vers les nouvelles clés. Idempotent."""
-    from .pipeline import settings  # import tardif : settings dépend de config seulement
     c = conn()
     for table in ("events", "versions"):
         for r in c.execute(f"SELECT id, type, tone FROM {table}").fetchall():
