@@ -486,7 +486,7 @@ def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Heade
         db.update("reports", "event_id", ev["id"], video_settings=json.dumps(vs, ensure_ascii=False),
                   video_duration=vs["duration"])
     if picked is not None:
-        db.update("reports", "event_id", ev["id"], music=json.dumps(picked))
+        generate.store_music(ev["id"], picked["main_id"], picked["final_id"])
     extra = {"video_prompt": str(body["video_prompt"] or "")[:4000]} if "video_prompt" in body else {}
     jid = db.enqueue(ev["id"], "generate", parts=parts, video_duration=dur, ai=True, **extra)
     return {"job_id": jid}
@@ -503,7 +503,8 @@ def pick_music(slug: str, body: dict = Body(default={}), x_admin_token: str = He
     if body.get("tones") is None:
         tones = _tones(ev["tone"], ev["type"])
     else:
-        if not isinstance(body["tones"], (list, str)):
+        if not isinstance(body["tones"], (list, str)) or (
+                isinstance(body["tones"], list) and any(not isinstance(t, str) for t in body["tones"])):
             err(400, "Tons invalides.")
         try:
             tones = settings.parse_tones(body["tones"])
@@ -516,12 +517,14 @@ def pick_music(slug: str, body: dict = Body(default={}), x_admin_token: str = He
     exclude = body.get("exclude") or []
     if not isinstance(exclude, list) or any(type(i) is not int for i in exclude):
         err(400, "Liste de morceaux à exclure invalide.")
+    if _active_job(ev["id"]):
+        err(409, "Une génération est déjà en cours.")
     got = music_mod.choose(tones, vs, exclude=exclude)
     main, final = got["main"], got["final"]
     db.report(ev["id"])
-    db.update("reports", "event_id", ev["id"], video_settings=json.dumps(vs, ensure_ascii=False),
-              video_duration=vs["duration"],
-              music=json.dumps({"main_id": main["id"] if main else None, "final_id": final["id"] if final else None}))
+    # reports.music = la musique choisie pour le prochain rendu (génération ou « Changer la musique »).
+    # Les réglages vidéo ne sont pas enregistrés ici : l'écran Générer les envoie avec /generate.
+    generate.store_music(ev["id"], main["id"] if main else None, final["id"] if final else None)
     return {"main": music_mod.public(main) if main else None, "final": music_mod.public(final) if final else None,
             "message": "" if main else NO_MUSIC_MSG}
 

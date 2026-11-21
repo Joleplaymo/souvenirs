@@ -92,6 +92,11 @@ def _music_ids(raw) -> dict:
             for k in ("main_id", "final_id")}
 
 
+def store_music(event_id: int, main_id, final_id) -> None:
+    """Enregistre dans reports.music les identifiants (ou None) des morceaux choisis pour le prochain rendu."""
+    db.update("reports", "event_id", event_id, music=json.dumps({"main_id": main_id, "final_id": final_id}))
+
+
 def stored_tracks(rep) -> dict:
     """Morceaux enregistrés pour le brouillon (encore présents), sans contrôle des réglages."""
     ids = _music_ids(db.jl(rep["music"]))
@@ -119,8 +124,7 @@ def pick_tracks(ev, rep, st) -> dict:
             final = c["final"]
     if main is None:  # pas de morceau principal : film sans musique du tout
         final = None
-    db.update("reports", "event_id", ev["id"], music=json.dumps(
-        {"main_id": main["id"] if main else None, "final_id": final["id"] if final else None}))
+    store_music(ev["id"], main["id"] if main else None, final["id"] if final else None)
     return {"main": main, "final": final}
 
 

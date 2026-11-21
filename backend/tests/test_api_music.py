@@ -1,3 +1,5 @@
+import json
+import secrets
 import subprocess
 
 import pytest
@@ -128,9 +130,6 @@ def test_mp3_route_unknown_and_missing_file():
 
 
 # ------------------------------------------------------------------ pré-écoute
-import json  # noqa: E402
-import secrets  # noqa: E402
-
 NO_MUSIC = "Aucune musique ne correspond à ces réglages : le film sera sans musique."
 
 
@@ -178,7 +177,6 @@ def test_preview_returns_and_stores_pick(pick_lib):
     assert j["main"]["id"] and j["main"]["url"] == f"/api/music/{j['main']['id']}.mp3" and j["message"] == ""
     rep = _rep(slug)
     assert json.loads(rep["music"])["main_id"] == j["main"]["id"]
-    assert json.loads(rep["video_settings"])["duration"] == 60
 
 
 def test_preview_other_title_uses_exclude(pick_lib):
@@ -202,10 +200,48 @@ def test_preview_empty_catalogue_message(pick_lib):
 def test_preview_validation_and_auth(pick_lib):
     pick_lib(["p1"])
     slug, h = _event()
-    assert _pick(slug, {}, video_settings={}).status_code in (401, 403)
-    assert _pick(slug, {"x-admin-token": "nope"}, video_settings={}).status_code in (401, 403)
+    assert _pick(slug, {}, video_settings={}).status_code == 403
+    assert _pick(slug, {"x-admin-token": "nope"}, video_settings={}).status_code == 403
+    assert _pick(slug, h, tones=[1, 2]).status_code == 400
     assert _pick(slug, h, tones=["a", "b", "c"]).status_code == 400
     assert _pick(slug, h, exclude="1").status_code == 400
     assert _pick(slug, h, exclude=[True]).status_code == 400
     assert _pick(slug, h, video_settings="x").status_code == 400
     assert _pick(slug, h, tones=["festif"], video_settings={}).status_code == 200
+
+
+def test_preview_incompatible_catalogue_gives_no_music(pick_lib, mp3):
+    pick_lib(["p1"])
+    db.run("UPDATE tracks SET mood='melancolique'")
+    slug, h = _event(tone="drole,festif")
+    r = _pick(slug, h, video_settings={}, exclude=[])
+    assert r.status_code == 200
+    assert r.json() == {"main": None, "final": None, "message": NO_MUSIC}
+    assert json.loads(_rep(slug)["music"]) == {"main_id": None, "final_id": None}
+
+
+def test_preview_touchante_returns_final(pick_lib):
+    pick_lib(["p1", "p2"])
+    db.run("UPDATE tracks SET mood='joyeux', energy=4 WHERE key='p1'")
+    db.run("UPDATE tracks SET mood='tendre', energy=1 WHERE key='p2'")
+    slug, h = _event(tone="tendre,festif")
+    r = _pick(slug, h, video_settings={"ending": "touchante", "genres": []}, exclude=[])
+    j = r.json()
+    assert r.status_code == 200 and j["main"] and j["final"] and j["final"]["id"] != j["main"]["id"]
+    assert json.loads(_rep(slug)["music"]) == {"main_id": j["main"]["id"], "final_id": j["final"]["id"]}
+
+
+def test_preview_does_not_touch_video_settings(pick_lib):
+    pick_lib(["p1"])
+    slug, h = _event()
+    before = _rep(slug)["video_settings"]
+    _pick(slug, h, video_settings={"duration": 300})
+    assert _rep(slug)["video_settings"] == before
+
+
+def test_preview_refused_while_generating(pick_lib):
+    pick_lib(["p1"])
+    slug, h = _event()
+    db.enqueue(db.one("SELECT id FROM events WHERE slug=?", slug)["id"], "generate", parts=["music"])
+    r = _pick(slug, h, video_settings={})
+    assert r.status_code == 409 and r.json()["detail"] == "Une génération est déjà en cours."
