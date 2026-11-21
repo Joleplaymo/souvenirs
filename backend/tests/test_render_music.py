@@ -94,6 +94,10 @@ def stored_music(ev):
     return json.loads(db.report(ev["id"])["music"])
 
 
+def roles(ev):
+    return stored_music(ev)["roles"]
+
+
 def spy_titles(monkeypatch):
     calls = []
     orig = video.title_card
@@ -169,7 +173,7 @@ def test_no_track_renders_silent_music(lib):
     run_job(ev, parts=["video"])
     rep = db.report(ev["id"])
     assert rep["video_ready"] == 1 and (draft(ev) / "video.mp4").is_file()
-    assert stored_music(ev) == {"main_id": None, "final_id": None}
+    assert stored_music(ev) == {"roles": {}}
 
 
 def test_uses_stored_pick_and_replaces_missing_one(lib):
@@ -177,11 +181,11 @@ def test_uses_stored_pick_and_replaces_missing_one(lib):
     ev = make_event()
     db.update("reports", "event_id", ev["id"], music=json.dumps({"main_id": ids["b"], "final_id": None}))
     run_job(ev, parts=["video"])
-    assert stored_music(ev)["main_id"] == ids["b"]
+    assert roles(ev)["main"] == ids["b"]
     # morceau supprimé depuis : pas de plantage, un autre est choisi
     db.update("reports", "event_id", ev["id"], music=json.dumps({"main_id": 999999, "final_id": 888888}))
     run_job(ev, parts=["video"])
-    assert stored_music(ev)["main_id"] in ids.values()
+    assert roles(ev)["main"] in ids.values()
 
 
 def test_stored_pick_not_allowed_anymore_is_replaced(lib):
@@ -189,16 +193,17 @@ def test_stored_pick_not_allowed_anymore_is_replaced(lib):
     ev = make_event(tone="drole,festif")
     db.update("reports", "event_id", ev["id"], music=json.dumps({"main_id": ids["triste"], "final_id": None}))
     run_job(ev, parts=["video"])
-    assert stored_music(ev)["main_id"] == ids["gai"]
+    assert roles(ev)["main"] == ids["gai"]
 
 
 def test_touchante_stores_final_track(lib):
     ids = lib([entry("gai"), entry("doux", mood="calme", genres=("piano",), energy=1, src="c.mp3")])
-    ev = make_event()
+    ev = make_event(photos=2)
     db.update("reports", "event_id", ev["id"],
               video_settings=json.dumps({**settings.defaults("weekend"), "ending": "touchante"}))
-    run_job(ev, parts=["video"])
-    assert stored_music(ev) == {"main_id": ids["gai"], "final_id": ids["doux"]}
+    _montage(ev, n_titles=2)  # séquence finale d'au moins 4 s (sinon le morceau final n'est pas joué)
+    run_job(ev, parts=["video"], ai=False)
+    assert stored_music(ev) == {"roles": {"main": ids["gai"], "final": ids["doux"]}}
     assert (draft(ev) / "video.mp4").is_file()
 
 
@@ -215,13 +220,13 @@ def test_final_track_without_final_sequence_is_dropped(lib, monkeypatch):
                                   {"type": "photo", "item_id": item["id"], "text": "", "duration": 2.0}]))
     calls = spy_titles(monkeypatch)
     run_job(ev, parts=["video"], ai=False)
-    assert stored_music(ev) == {"main_id": ids["gai"], "final_id": None}
+    assert stored_music(ev) == {"roles": {"main": ids["gai"]}}
     assert not any("Doux" in c for c in calls)
     assert video.read_meta(draft(ev) / video.BASE)["credits"] == []
     # « Changer la musique » ne le réintroduit pas non plus
     db.update("reports", "event_id", ev["id"], music=json.dumps({"main_id": ids["gai"], "final_id": ids["doux"]}))
     generate.remix(db.one("SELECT * FROM events WHERE id=?", ev["id"]), noop)
-    assert stored_music(ev) == {"main_id": ids["gai"], "final_id": None}
+    assert stored_music(ev) == {"roles": {"main": ids["gai"]}}
     assert video.read_meta(draft(ev) / video.BASE)["credits"] == []
 
 
@@ -277,7 +282,7 @@ def test_legacy_report_without_settings_generates(lib):
     run_job(ev, parts=["video"], video_duration=60)
     rep = db.report(ev["id"])
     assert rep["video_ready"] == 1 and (draft(ev) / "video.mp4").is_file()
-    assert stored_music(ev)["main_id"] is not None
+    assert roles(ev)["main"] is not None
 
 
 # ------------------------------------------------------------------ changer la musique
@@ -292,7 +297,7 @@ def test_remix_changes_track_only(lib):
     db.update("reports", "event_id", ev["id"], music=json.dumps({"main_id": ids["b"], "final_id": None}))
     generate.remix(db.one("SELECT * FROM events WHERE id=?", ev["id"]), noop)
     assert base.stat().st_size == size and base.stat().st_mtime_ns == mtime
-    assert stored_music(ev)["main_id"] == ids["b"]
+    assert roles(ev)["main"] == ids["b"]
     out = media.probe(draft(ev) / "video.mp4")
     assert out["has_audio"] and abs(out["duration"] - media.probe(base)["duration"]) <= 0.1
 
@@ -308,12 +313,12 @@ def test_remix_job_uses_body_pick_without_ai(lib, monkeypatch):
     monkeypatch.setattr(generate.ai, "plan_montage", boom)
     monkeypatch.setattr(generate.ai, "describe", boom)
     monkeypatch.setattr(generate.video, "_render_segment", boom)
-    other = ids["b"] if stored_music(ev)["main_id"] == ids["a"] else ids["a"]
+    other = ids["b"] if roles(ev)["main"] == ids["a"] else ids["a"]
     r = client.post(f"/api/events/{ev['slug']}/generate", json={"parts": ["music"], "music": {"main_id": other}},
                     headers={"x-admin-token": ev["admin_token"]})
     assert r.status_code == 200, r.text
     generate.generate(db.one("SELECT * FROM jobs WHERE id=?", r.json()["job_id"]))
-    assert stored_music(ev)["main_id"] == other
+    assert roles(ev)["main"] == other
 
 
 def test_remix_updates_credit_card(lib, monkeypatch):
@@ -384,14 +389,14 @@ def test_versions_keep_base_and_music(lib):
     run_job(ev, parts=["video"])
     vid = db.report(ev["id"])["current_version"]
     v = db.one("SELECT * FROM versions WHERE id=?", vid)
-    assert json.loads(v["music"])["main_id"] == ids["a"] and json.loads(v["video_settings"])["mix"] == 80
+    assert json.loads(v["music"])["roles"]["main"] == ids["a"] and json.loads(v["video_settings"])["mix"] == 80
     assert (versions.vdir(ev["id"], vid) / "video_base.mp4").is_file()
     assert (versions.vdir(ev["id"], vid) / "video_base.json").is_file()
     db.update("reports", "event_id", ev["id"], music=None, video_settings=None)
     (draft(ev) / "video_base.mp4").unlink()
     assert versions.restore(ev["id"], vid)
     rep = db.report(ev["id"])
-    assert json.loads(rep["music"])["main_id"] == ids["a"] and json.loads(rep["video_settings"])["mix"] == 80
+    assert json.loads(rep["music"])["roles"]["main"] == ids["a"] and json.loads(rep["video_settings"])["mix"] == 80
     assert (draft(ev) / "video_base.mp4").is_file()
 
 
@@ -408,7 +413,7 @@ def test_draft_returns_default_settings_and_no_music():
     slug, adm = _api_event()
     d = client.get(f"/api/events/{slug}/draft", headers=adm).json()
     assert d["video_settings"] == settings.normalize(None, "mariage")
-    assert d["music"] == {"main": None, "final": None}
+    assert d["music"] == {"tracks": [], "main": None, "final": None}
 
 
 def test_generate_stores_settings_and_music(lib):
@@ -423,7 +428,7 @@ def test_generate_stores_settings_and_music(lib):
     vs = json.loads(rep["video_settings"])
     assert vs == settings.normalize(body["video_settings"], "mariage") and vs["genres"] == ["rock"]
     assert rep["video_duration"] == 60
-    assert json.loads(rep["music"]) == {"main_id": ids["a"], "final_id": ids["doux"]}
+    assert json.loads(rep["music"]) == {"roles": {"main": ids["a"], "final": ids["doux"]}}
     job = db.one("SELECT * FROM jobs WHERE id=?", r.json()["job_id"])
     assert json.loads(job["params"])["video_duration"] == 60
     d = client.get(f"/api/events/{slug}/draft", headers=adm).json()
@@ -476,3 +481,157 @@ def test_music_credits_empty_without_credit(lib):
     run_job(ev, parts=["video"])
     assert client.post(f"/api/events/{ev['slug']}/publish", headers=adm).status_code == 200
     assert client.get(f"/api/events/{ev['slug']}/published").json()["music_credits"] == []
+
+
+# ------------------------------------------------------------------ évolution sur plusieurs morceaux
+
+
+def test_old_music_format_still_read(lib):
+    ids = lib([entry("a"), entry("b", src="b.mp3")])
+    ev = make_event()
+    db.update("reports", "event_id", ev["id"], music=json.dumps({"main_id": ids["a"], "final_id": None}))
+    got = generate.stored_tracks(db.report(ev["id"]))
+    assert list(got) == ["main"] and got["main"]["id"] == ids["a"]
+    adm = {"x-admin-token": ev["admin_token"]}
+    d = client.get(f"/api/events/{ev['slug']}/draft", headers=adm).json()
+    assert d["music"]["tracks"] == [{"role": "main", "track": music.public(music.get(ids["a"]))}]
+    assert d["music"]["main"]["id"] == ids["a"] and d["music"]["final"] is None
+    # le rendu repart du morceau enregistré et enregistre au nouveau format
+    run_job(ev, parts=["video"])
+    assert roles(ev)["main"] == ids["a"]
+
+
+def _sections_segs(items, n_titles=3, photo=4.0):
+    """Film de n séquences : carton 2 s + photo (durée `photo`) chacune."""
+    segs = []
+    ids = list(items)
+    for i in range(n_titles):
+        segs.append({"type": "title", "item_id": 0, "text": f"Partie {i + 1}", "duration": 2.0})
+        segs.append({"type": "photo", "item_id": ids[i % len(ids)], "text": "", "duration": photo})
+    return segs
+
+
+def test_section_starts_and_placement():
+    segs = [{"type": "title", "duration": 2.0}, {"type": "photo", "duration": 4.0},
+            {"type": "title", "duration": 2.0}, {"type": "photo", "duration": 4.0},
+            {"type": "title", "duration": 2.0}, {"type": "photo", "duration": 4.0}]
+    assert video.section_starts(segs) == [0.0, 6.0, 12.0]
+    placed = video.place_tracks(["intro", "main", "peak"], [0.0, 6.0, 12.0], 18.0, "montee")
+    assert placed == [("intro", 0.0), ("main", 6.0), ("peak", 12.0)]
+    placed = video.place_tracks(["intro", "peak"], [0.0, 6.0, 12.0], 18.0, "calme_explosion")
+    assert placed == [("intro", 0.0), ("peak", 6.0)]
+    placed = video.place_tracks(["main", "final"], [0.0, 6.0, 12.0], 18.0, "festif_emotion")
+    assert placed == [("main", 0.0), ("final", 12.0)]
+
+
+def test_short_film_collapses_tracks():
+    all_roles = ["intro", "main", "peak", "final"]
+    for segs in ([{"type": "title", "duration": 3.0}, {"type": "photo", "duration": 27.0}],
+                 [{"type": "photo", "duration": 13.0}, {"type": "title", "duration": 2.0},
+                  {"type": "photo", "duration": 15.0}],
+                 [{"type": "photo", "duration": 2.0}, {"type": "title", "duration": 2.0},
+                  {"type": "photo", "duration": 26.0}],
+                 [{"type": "photo", "duration": 27.0}, {"type": "title", "duration": 2.0},
+                  {"type": "photo", "duration": 1.0}]):
+        sections = video.section_starts(segs)
+        assert len(sections) == 1
+        for evo in ("constante", "montee", "calme_explosion", "festif_emotion"):
+            placed = video.place_tracks(all_roles, sections, 30.0, evo)
+            assert 1 <= len(placed) <= 2, (segs, evo, placed)
+            starts = [s for _, s in placed] + [30.0]
+            assert placed[0][1] == 0.0
+            assert all(b - a >= 4.0 for a, b in zip(starts, starts[1:])), (segs, evo, placed)
+            # le morceau final ne remonte jamais avant la dernière séquence
+            assert all(s == sections[0] and s > 0 for r, s in placed if r == "final"), (segs, evo, placed)
+
+
+def test_mix_three_tracks_duration(sines, tmp_path):
+    base = tmp_path / "video_base.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=gray:s=320x180:r=30:d=15",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "15", *video.ENC, str(base)], check=True)
+    out = tmp_path / "video.mp4"
+    tracks = [{"path": sines / "a.mp3", "start": 0.0}, {"path": sines / "b.mp3", "start": 5.0},
+              {"path": sines / "c.mp3", "start": 10.0}]
+    video.mix_music(base, out, tracks, 80)
+    info = media.probe(out)
+    assert info["has_audio"] and abs(info["duration"] - media.probe(base)["duration"]) <= 0.1
+
+
+def test_credits_list_every_played_track(lib, tmp_path, monkeypatch):
+    lib([entry("a")])
+    ev = make_event(photos=3)
+    items = {it["id"]: it for it in db.q("SELECT * FROM items WHERE event_id=?", ev["id"])}
+    p = music.path(music.get_by_key("a"))
+    tracks = [{"role": r, "path": p, "credit": CREDIT.replace("Carefree", r)}
+              for r in ("intro", "main", "peak", "final")]
+    calls = spy_titles(monkeypatch)
+    out = tmp_path / "video.mp4"
+    video.render(_sections_segs(items), items, out, tracks, 60, evolution="montee")
+    meta = video.read_meta(tmp_path / video.BASE)
+    assert [round(s) for s in meta["sections"]] == [0, 6, 12]
+    # intro 0 s, principal 6 s, final 12 s (même début que le pic : le final l'emporte) ; le pic n'est pas joué
+    assert meta["credits"] == [CREDIT.replace("Carefree", r) for r in ("intro", "main", "final")]
+    assert "« peak »" not in calls[-1] and all(f"« {r} »" in calls[-1] for r in ("intro", "main", "final"))
+    info = media.probe(out)
+    assert info["has_audio"] and abs(info["duration"] - media.probe(tmp_path / video.BASE)["duration"]) <= 0.1
+
+
+def _montage(ev, n_titles=3, photo=4.0):
+    items = {it["id"]: it for it in db.q("SELECT * FROM items WHERE event_id=?", ev["id"])}
+    db.update("reports", "event_id", ev["id"], montage=json.dumps(_sections_segs(items, n_titles, photo)))
+
+
+def test_render_stores_only_played_roles_and_remix_reads_sections(lib):
+    c = {k: CREDIT.replace("Carefree", k) for k in ("un", "deux", "trois")}
+    ids = lib([entry("un", energy=3, credit=c["un"]), entry("deux", energy=4, src="b.mp3", credit=c["deux"]),
+               entry("trois", energy=5, src="c.mp3", credit=c["trois"])])
+    ev = make_event(photos=3)
+    db.update("reports", "event_id", ev["id"],
+              video_settings=json.dumps({**settings.defaults("weekend"), "evolution": "montee", "energy": 4}))
+    _montage(ev)
+    run_job(ev, parts=["video"], ai=False)
+    assert roles(ev) == {"intro": ids["un"], "main": ids["deux"], "peak": ids["trois"]}
+    meta = video.read_meta(draft(ev) / video.BASE)
+    assert meta["credits"] == [c["un"], c["deux"], c["trois"]]
+    # « Changer la musique » relit les débuts de séquence enregistrés
+    db.update("reports", "event_id", ev["id"],
+              music=json.dumps({"roles": {"intro": ids["un"], "main": ids["trois"], "peak": ids["deux"]}}))
+    generate.remix(db.one("SELECT * FROM events WHERE id=?", ev["id"]), noop)
+    assert roles(ev) == {"intro": ids["un"], "main": ids["trois"], "peak": ids["deux"]}
+    assert video.read_meta(draft(ev) / video.BASE)["credits"] == [c["un"], c["trois"], c["deux"]]
+    out = media.probe(draft(ev) / "video.mp4")
+    assert abs(out["duration"] - media.probe(draft(ev) / video.BASE)["duration"]) <= 0.1
+    # film de la PR 1 (pas de « sections ») : remixé sans erreur, à partir de final_from
+    meta = video.read_meta(draft(ev) / video.BASE)
+    meta.pop("sections")
+    (draft(ev) / video.META).write_text(json.dumps(meta), encoding="utf-8")
+    generate.remix(db.one("SELECT * FROM events WHERE id=?", ev["id"]), noop)
+    assert roles(ev) and set(roles(ev)) <= {"intro", "main", "peak"}
+    assert abs(media.probe(draft(ev) / "video.mp4")["duration"] - media.probe(draft(ev) / video.BASE)["duration"]) <= 0.1
+
+
+def test_generate_and_pick_use_roles(lib):
+    ids = lib([entry("un", energy=3), entry("deux", energy=4, src="b.mp3"), entry("trois", energy=5, src="c.mp3")])
+    ev = make_event()
+    adm = {"x-admin-token": ev["admin_token"]}
+    vs = {**settings.defaults("weekend"), "evolution": "montee", "energy": 4}
+    pick = f"/api/events/{ev['slug']}/music/pick"
+    r = client.post(pick, json={"video_settings": vs}, headers=adm).json()
+    assert [t["role"] for t in r["tracks"]] == ["intro", "main", "peak"]
+    assert r["main"]["id"] == ids["deux"] and r["final"] is None and r["message"] == ""
+    r2 = client.post(pick, json={"video_settings": vs, "exclude": {"peak": [ids["trois"]]}}, headers=adm).json()
+    assert {t["role"]: t["track"]["id"] for t in r2["tracks"]}.get("peak") != ids["trois"]
+    assert client.post(pick, json={"exclude": {"zzz": [1]}}, headers=adm).status_code == 400
+    assert client.post(pick, json={"exclude": {"main": ["x"]}}, headers=adm).status_code == 400
+    body = {"parts": ["video"], "video_settings": vs,
+            "music": {"roles": {"intro": ids["un"], "main": ids["deux"], "peak": ids["trois"]}}}
+    r = client.post(f"/api/events/{ev['slug']}/generate", json=body, headers=adm)
+    assert r.status_code == 200, r.text
+    assert roles(ev) == {"intro": ids["un"], "main": ids["deux"], "peak": ids["trois"]}
+    d = client.get(f"/api/events/{ev['slug']}/draft", headers=adm).json()
+    assert [t["role"] for t in d["music"]["tracks"]] == ["intro", "main", "peak"]
+    assert d["music"]["main"]["id"] == ids["deux"]
+    db.run("UPDATE jobs SET status='done' WHERE event_id=?", ev["id"])
+    for bad in ({"roles": {"zzz": 1}}, {"roles": {"main": "x"}}, {"roles": []}):
+        r = client.post(f"/api/events/{ev['slug']}/generate", json={"parts": ["video"], "music": bad}, headers=adm)
+        assert r.status_code == 400, bad

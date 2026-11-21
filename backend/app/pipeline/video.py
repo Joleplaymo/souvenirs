@@ -452,7 +452,13 @@ def _render_segment(seg, item, tmp: Path, idx: int, frame: Frame = DEFAULT_FRAME
 
 
 BASE = "video_base.mp4"  # film monté sans musique (carton de crédit compris), pour changer la musique seule
-META = "video_base.json"  # {"final_from", "body", "credits"} : ce qu'il faut pour refaire le mélange
+# {"sections", "final_from", "body", "credits", "w", "h", "title_style"} : ce qu'il faut pour refaire le mélange
+META = "video_base.json"
+
+CROSSFADE = 2.0  # fondu enchaîné entre deux morceaux
+MIN_TRACK = 4.0  # un morceau qui durerait moins longtemps n'est pas joué (le précédent continue)
+# même début pour plusieurs morceaux : on garde le plus important
+PLACE_PRIORITY = ("final", "main", "peak", "intro")
 
 
 def credit_lines(credits) -> list[str]:
@@ -464,9 +470,61 @@ def credit_lines(credits) -> list[str]:
     return seen
 
 
-def final_fits(final_from, body) -> bool:
-    """Le morceau final a-t-il une séquence finale assez longue (2 s de fondu au moins avant la fin du film) ?"""
-    return final_from is not None and body is not None and 0 < final_from < body - 2
+def section_starts(segs: list[dict]) -> list[float]:
+    """Débuts prévus des cartons de titre (ouverture comprise), d'après les durées du plan."""
+    out, t = [], 0.0
+    for s in segs:
+        if s["type"] == "title":
+            out.append(round(t, 3))
+        t += float(s["duration"])
+    return out
+
+
+def meta_sections(meta: dict) -> list[float]:
+    """Débuts réels des cartons enregistrés au rendu ; film d'avant (PR 1) : seulement le dernier (final_from)."""
+    if isinstance(meta.get("sections"), list):
+        return meta["sections"]
+    return [meta["final_from"]] if meta.get("final_from") is not None else []
+
+
+def place_tracks(roles: list[str], sections, body, evolution: str = "constante") -> list[tuple[str, float]]:
+    """Début de chaque morceau joué : [(rôle, début)] dans l'ordre. intro à 0 ; main au début de séquence le plus
+    proche du tiers du film (montée) ou à 0 ; peak au plus proche des 2/3 (montée) ou de 40 % (calme puis
+    explosion) ; final au début de la dernière séquence. Seuls comptent les débuts qui laissent 4 s de part et
+    d'autre. Le premier morceau commence à 0 ; un morceau de moins de 4 s est retiré, le précédent continue ;
+    le morceau final ne remonte jamais avant sa séquence (seul, il n'est pas joué)."""
+    body = float(body or 0)
+    starts = sorted({0.0, *(round(float(s), 3) for s in (sections or [])
+                            if s is not None and MIN_TRACK <= float(s) <= body - MIN_TRACK)})
+
+    def near(frac):
+        return min(starts, key=lambda s: (abs(s - body * frac), s))
+
+    want = {}
+    for r in roles:
+        if r == "intro":
+            want[r] = 0.0
+        elif r == "main":
+            want[r] = near(1 / 3) if evolution == "montee" else 0.0
+        elif r == "peak":
+            want[r] = near(0.4 if evolution == "calme_explosion" else 2 / 3)
+        elif r == "final" and len(starts) > 1:
+            want[r] = starts[-1]
+    others = [r for r in want if r != "final"]
+    if not others:
+        return []
+    want[min(others, key=lambda r: want[r])] = 0.0  # pas de silence au début du film
+    at = {}
+    for r in sorted(want, key=PLACE_PRIORITY.index):
+        at.setdefault(want[r], r)
+    placed = sorted(at.items())
+    while len(placed) > 1:
+        ends = [s for s, _ in placed[1:]] + [body]
+        short = next((i for i, (s, _) in enumerate(placed) if ends[i] - s < MIN_TRACK), None)
+        if short is None:
+            break
+        del placed[max(short, 1)]  # le précédent continue (le premier, à 0, reste)
+    return [(r, s) for s, r in placed]
 
 
 def credit_segment(credits: list[str]) -> dict:
@@ -488,20 +546,31 @@ def read_meta(base: Path) -> dict | None:
         return None
 
 
-def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, frame: Frame | None = None,
-           style: Style | None = None, on_progress=None) -> float:
+def _as_tracks(tracks) -> tuple[list[dict], list[str]]:
+    """Morceaux [{"role", "path", "credit"}] et crédits imposés ; accepte l'ancien format
+    {"main", "final", "credits"} (crédits alors toujours affichés)."""
+    if isinstance(tracks, dict):
+        return ([{"role": r, "path": tracks[r], "credit": ""} for r in ("main", "final") if tracks.get(r)],
+                list(tracks.get("credits") or []))
+    return [t for t in tracks or [] if t.get("path")], []
+
+
+def render(segs: list[dict], items: dict, out: Path, tracks, mix: int, frame: Frame | None = None,
+           style: Style | None = None, on_progress=None, evolution: str = "constante") -> float:
     """Assemble les segments (+ carton de crédit) dans video_base.mp4, puis y mélange la musique dans `out`.
-    tracks = {"main": Path | None, "final": Path | None, "credits": [str]}. Retourne la durée finale.
+    tracks = [{"role", "path", "credit"}] : placés sur les débuts réels des séquences (place_tracks) ;
+    seuls les morceaux joués sont crédités. Retourne la durée finale.
     `style` règle les fondus (rythme) ; les effets sont portés par chaque segment (normalize)."""
     frame = frame or DEFAULT_FRAME
     title_style = style.title_style if style else "carnet"
+    tracks, fixed_credits = _as_tracks(tracks)
     if not segs:
         raise RuntimeError("Le plan de montage est vide : il faut au moins une photo ou une vidéo.")
     tmp = out.parent / "tmp_video"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     try:
-        files, t, final_from = [], 0.0, None
+        files, t, sections = [], 0.0, []
         for i, seg in enumerate(segs):
             try:
                 f = _render_segment(seg, items.get(seg["item_id"]), tmp, i, frame, style)
@@ -509,17 +578,18 @@ def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, fra
                 print(f"[montage] segment {i} ignoré : {e}", flush=True)
                 f = None
             if f is not None:
-                if seg["type"] == "title" and t > 0:
-                    final_from = t  # début du dernier carton de titre (hors ouverture) : entrée du morceau final
+                if seg["type"] == "title":
+                    sections.append(round(t, 3))  # début réel du carton (durées sondées, segments ignorés exclus)
                 files.append(f)
                 t += media.probe(f)["duration"] or seg["duration"]
             if on_progress:
                 on_progress((i + 1) / (len(segs) + 1))
         if not files:
             raise RuntimeError("Aucun extrait n'a pu être monté.")
-        if tracks.get("final") and not final_fits(final_from, t):  # morceau final ni joué ni crédité
-            tracks = {**tracks, "final": None, "credits": tracks.get("main_credits", tracks.get("credits"))}
-        credits = credit_lines(tracks.get("credits"))
+        body = round(t, 3)
+        by_role = {tr["role"]: tr for tr in tracks}
+        play = [{**by_role[r], "start": s} for r, s in place_tracks(list(by_role), sections, body, evolution)]
+        credits = credit_lines([p.get("credit") for p in play] + fixed_credits)  # morceaux joués seulement
         if credits:
             files.append(_render_segment(credit_segment(credits), None, tmp, len(segs), frame,
                                          card_style=title_style))
@@ -527,11 +597,12 @@ def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, fra
         _concat(files, tmp / "list.txt", joined)
         base = out.parent / BASE
         joined.replace(base)
-        (out.parent / META).write_text(json.dumps({"final_from": final_from, "body": round(t, 3),
-                                                   "credits": credits, "w": frame.w, "h": frame.h,
+        inner = [s for s in sections if s > 0]
+        (out.parent / META).write_text(json.dumps({"sections": sections, "final_from": inner[-1] if inner else None,
+                                                   "body": body, "credits": credits, "w": frame.w, "h": frame.h,
                                                    "title_style": title_style},
                                                   ensure_ascii=False), encoding="utf-8")
-        mix_music(base, out, tracks, mix, final_from)
+        mix_music(base, out, play, mix)
         return media.probe(base)["duration"] or 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -566,25 +637,34 @@ def recredit(base: Path, credits: list[str]):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def mix_music(base: Path, out: Path, tracks: dict, mix: int, final_from: float | None) -> None:
+def mix_music(base: Path, out: Path, tracks: list[dict], mix: int) -> None:
     """Mélange la musique sous le son du film (compression latérale) ; sans morceau, copie le film tel quel.
-    Morceau final : fondu enchaîné de 2 s depuis le principal, à partir de `final_from`."""
+    tracks = [{"path", "start"}] : chaque morceau (en boucle) entre à son début par un fondu enchaîné de 2 s
+    avec le précédent. Le film mixé garde la durée de `base`."""
     total = media.probe(base)["duration"] or 0
     tmp = out.with_name(out.stem + ".mix.mp4")
-    main, final = tracks.get("main"), tracks.get("final")
-    if not main:
+    tracks = sorted((t for t in tracks or [] if t.get("path")), key=lambda t: float(t.get("start") or 0))
+    if not tracks:
         media.sh(["ffmpeg", "-y", "-i", str(base), "-c", "copy", "-movflags", "+faststart", str(tmp)])
         tmp.replace(out)
         return
     vol = 0.15 + 0.85 * max(0, min(100, int(mix))) / 100
     fmt = "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS"
-    args = ["ffmpeg", "-y", "-i", str(base), "-stream_loop", "-1", "-i", str(main)]
-    if final and final_from is not None and 0 < final_from < total - 2:
-        args += ["-stream_loop", "-1", "-i", str(final)]
-        bed = (f"[1:a]{fmt},atrim=0:{final_from + 2:.3f}[m1];[2:a]{fmt}[m2];"
-               "[m1][m2]acrossfade=d=2[bed];")
-    else:
-        bed = f"[1:a]{fmt}[bed];"
+    args = ["ffmpeg", "-y", "-i", str(base)]
+    bed = ""
+    for i, t in enumerate(tracks):
+        args += ["-stream_loop", "-1", "-i", str(t["path"])]
+        bed += f"[{i + 1}:a]{fmt}[t{i}];"
+    first = float(tracks[0].get("start") or 0)
+    cur = "t0"
+    if first > 0:  # par sécurité : silence avant le premier morceau
+        bed += f"[t0]adelay={int(first * 1000)}:all=1[d0];"
+        cur = "d0"
+    for i in range(1, len(tracks)):
+        cut = float(tracks[i]["start"]) + CROSSFADE  # le fondu occupe [début, début + 2 s]
+        bed += f"[{cur}]atrim=0:{cut:.3f}[h{i}];[h{i}][t{i}]acrossfade=d={CROSSFADE}[x{i}];"
+        cur = f"x{i}"
+    bed += f"[{cur}]anull[bed];"
     fc = ("[0:a]asplit[voice][key];" + bed
           + f"[bed]volume={vol:.3f},afade=t=in:d=1.5,afade=t=out:st={max(0, total - 3):.2f}:d=3[m];"
           "[m][key]sidechaincompress=threshold=0.02:ratio=10:attack=150:release=900[duck];"

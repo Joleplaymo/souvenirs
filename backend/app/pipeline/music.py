@@ -153,23 +153,25 @@ def sync_catalogue() -> int:
     return len(entries)
 
 
-def allowed(track: dict, tones: list[str], final: bool, ending: str) -> bool:
+def allowed(track: dict, tones: list[str], final: bool, ending: str, evolution: str = "constante") -> bool:
     """Règle anti-mélancolie : pas de morceau triste sauf ton tendre/nostalgique,
-    ou séquence finale d'une fin touchante."""
+    ou morceau de la séquence finale d'une fin touchante ou d'une évolution « festif puis émotion »."""
     if track["mood"] not in SAD_MOODS:
         return True
     if any(t in SOFT_TONES for t in tones):
         return True
-    return bool(final and ending == "touchante")
+    return bool(final and (ending == "touchante" or evolution == "festif_emotion"))
 
 
-def candidates(tones: list[str], settings: dict, final: bool = False, exclude=()) -> list[dict]:
-    target = settings.get("energy", 3)
+def candidates(tones: list[str], settings: dict, final: bool = False, exclude=(), target: int | None = None) -> list[dict]:
+    """Morceaux permis les plus proches de l'énergie cible (réglages par défaut) : même genre à ±1,
+    puis tout genre à ±1, puis ±2. L'humeur n'est jamais assouplie."""
+    target = settings.get("energy", 3) if target is None else target
     wanted = set(settings.get("genres") or [])
-    ending = settings.get("ending")
+    ending, evolution = settings.get("ending"), settings.get("evolution", "constante")
     pool = []
     for t in all_tracks():
-        if t["id"] in exclude or not usable(t) or not allowed(t, tones, final, ending):
+        if t["id"] in exclude or not usable(t) or not allowed(t, tones, final, ending, evolution):
             continue
         pool.append((abs(t["energy"] - target), -len(wanted & set(t["genres"])), t["id"], t))
     pool.sort(key=lambda x: x[:3])
@@ -180,20 +182,80 @@ def candidates(tones: list[str], settings: dict, final: bool = False, exclude=()
     return []
 
 
+ROLES = ("intro", "main", "peak", "final")  # ordre de lecture dans le film
+PICK_ORDER = ("main", "peak", "final", "intro")  # ordre de choix : le morceau principal d'abord
+EVOLUTION_ROLES = {"constante": ("main",), "montee": ("intro", "main", "peak"),
+                   "calme_explosion": ("intro", "peak"), "festif_emotion": ("main", "final")}
+
+
+def roles_for(settings: dict) -> list[str]:
+    """Rôles des morceaux selon l'évolution ; « final » s'ajoute à toute évolution quand la fin est touchante."""
+    roles = list(EVOLUTION_ROLES.get(settings.get("evolution"), ("main",)))
+    if settings.get("ending") == "touchante" and "final" not in roles:
+        roles.append("final")
+    return roles
+
+
+def _calm(role, tones, settings, used) -> dict | None:
+    """Morceau calme (énergie ≤ 2) : intro de « calme puis explosion », ou morceau final
+    (humeur tendre, calme ou mélancolique). Genre demandé d'abord, puis le plus calme."""
+    final = role == "final"
+    wanted = set(settings.get("genres") or [])
+    best = None
+    for t in all_tracks():
+        if (t["id"] in used or not usable(t) or t["energy"] > 2 or (final and t["mood"] not in FINAL_MOODS)
+                or not allowed(t, tones, final, settings.get("ending"), settings.get("evolution", "constante"))):
+            continue
+        key = (-len(wanted & set(t["genres"])), t["energy"], t["id"])
+        if best is None or key < best[0]:
+            best = (key, t)
+    return best[1] if best else None
+
+
+def _pick_role(role, tones, settings, used) -> dict | None:
+    evolution = settings.get("evolution", "constante")
+    if role == "final" or (role == "intro" and evolution == "calme_explosion"):
+        return _calm(role, tones, settings, used)
+    energy = settings.get("energy", 3)
+    if role == "peak":
+        target = 5 if evolution == "calme_explosion" else energy + 1
+    elif role == "intro":
+        target = energy - 1
+    else:
+        target = energy
+    got = candidates(tones, settings, final=False, exclude=used, target=max(1, min(5, target)))
+    return got[0] if got else None
+
+
+def plan_tracks(tones: list[str], settings: dict, exclude: dict | None = None, keep: dict | None = None) -> list[dict]:
+    """Morceaux du film selon l'évolution : [{"role", "track"}] dans l'ordre de lecture.
+    `exclude` : {rôle: [ids]} à ne pas proposer pour ce rôle (« Autre titre ») ;
+    `keep` : {rôle: morceau} déjà choisis, gardés s'ils restent jouables et permis pour ce rôle.
+    Un rôle sans candidat est omis ; jamais deux fois le même morceau ; un morceau final seul n'est pas joué."""
+    exclude = exclude or {}
+    roles = roles_for(settings)
+    ending, evolution = settings.get("ending"), settings.get("evolution", "constante")
+    chosen, used = {}, set()
+    for role in PICK_ORDER:
+        t = (keep or {}).get(role)
+        if (role in roles and t and t["id"] not in used and usable(t)
+                and allowed(t, tones, role == "final", ending, evolution)):
+            chosen[role] = t
+            used.add(t["id"])
+    for role in PICK_ORDER:
+        if role in roles and role not in chosen:
+            t = _pick_role(role, tones, settings, used | set(exclude.get(role) or ()))
+            if t:
+                chosen[role] = t
+                used.add(t["id"])
+    if set(chosen) <= {"final"}:  # pas de morceau avant la séquence finale : film sans musique
+        return []
+    return [{"role": r, "track": chosen[r]} for r in ROLES if r in chosen]
+
+
 def choose(tones: list[str], settings: dict, exclude=()) -> dict:
-    cands = candidates(tones, settings, final=False, exclude=exclude)
-    main = cands[0] if cands else None
-    final = None
-    if settings.get("ending") == "touchante":
-        wanted = set(settings.get("genres") or [])
-        best = None
-        for t in all_tracks():
-            if (t["id"] in exclude or (main and t["id"] == main["id"]) or not usable(t)
-                    or t["mood"] not in FINAL_MOODS or t["energy"] > 2
-                    or not allowed(t, tones, True, "touchante")):
-                continue
-            key = (-len(wanted & set(t["genres"])), t["energy"], t["id"])
-            if best is None or key < best[0]:
-                best = (key, t)
-        final = best[1] if best else None
-    return {"main": main, "final": final}
+    """Ancienne interface (PR 1) : morceau principal et, si la fin est touchante, morceau final."""
+    ex = list(exclude)
+    got = {p["role"]: p["track"]
+           for p in plan_tracks(tones, {**settings, "evolution": "constante"}, {"main": ex, "final": ex})}
+    return {"main": got.get("main"), "final": got.get("final")}

@@ -97,63 +97,70 @@ def video_settings(ev, rep) -> dict:
     return settings.normalize(raw if isinstance(raw, dict) else None, ev["type"])
 
 
-def _music_ids(raw) -> dict:
+def _id(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def music_roles(raw) -> dict:
+    """reports.music → {rôle: id}. Format actuel {"roles": {rôle: id}} ; l'ancien {"main_id", "final_id"}
+    (brouillons de la PR 1) est encore lu."""
     raw = raw if isinstance(raw, dict) else {}
-    return {k: raw.get(k) if isinstance(raw.get(k), int) and not isinstance(raw.get(k), bool) else None
-            for k in ("main_id", "final_id")}
+    if isinstance(raw.get("roles"), dict):
+        return {r: raw["roles"][r] for r in music.ROLES if _id(raw["roles"].get(r)) is not None}
+    return {r: raw[f"{r}_id"] for r in ("main", "final") if _id(raw.get(f"{r}_id")) is not None}
 
 
-def store_music(event_id: int, main_id, final_id) -> None:
-    """Enregistre dans reports.music les identifiants (ou None) des morceaux choisis pour le prochain rendu."""
-    db.update("reports", "event_id", event_id, music=json.dumps({"main_id": main_id, "final_id": final_id}))
+def store_music(event_id: int, roles: dict) -> None:
+    """Enregistre dans reports.music les morceaux ({rôle: id}) choisis pour le prochain rendu."""
+    roles = {r: roles[r] for r in music.ROLES if _id(roles.get(r)) is not None}
+    db.update("reports", "event_id", event_id, music=json.dumps({"roles": roles}))
 
 
 def stored_tracks(rep) -> dict:
-    """Morceaux enregistrés pour le brouillon (encore présents), sans contrôle des réglages."""
-    ids = _music_ids(db.jl(rep["music"]))
+    """Morceaux enregistrés pour le brouillon ({rôle: morceau}, encore présents), sans contrôle des réglages."""
     found = {}
-    for k in ("main", "final"):
-        t = music.get(ids[f"{k}_id"]) if ids[f"{k}_id"] is not None else None
-        found[k] = t if music.usable(t) else None
+    for r, i in music_roles(db.jl(rep["music"])).items():
+        t = music.get(i)
+        if music.usable(t):
+            found[r] = t
     return found
 
 
-def pick_tracks(ev, rep, st) -> dict:
-    """Morceaux du film : ceux choisis à la pré-écoute s'ils existent et restent permis, sinon music.choose.
-    Le choix est enregistré dans reports.music."""
-    tones = ai._tones(ev)
-    touchante = st["ending"] == "touchante"
-    got = stored_tracks(rep)
-    main = got["main"] if got["main"] and music.allowed(got["main"], tones, False, st["ending"]) else None
-    final = got["final"] if touchante and got["final"] and music.allowed(got["final"], tones, True, "touchante") else None
-    if final and main and final["id"] == main["id"]:
-        final = None
-    if main is None or (touchante and final is None):
-        c = music.choose(tones, st, exclude=[t["id"] for t in (main, final) if t])
-        main = main or c["main"]
-        if touchante and final is None and c["final"] and (main is None or c["final"]["id"] != main["id"]):
-            final = c["final"]
-    if main is None:  # pas de morceau principal : film sans musique du tout
-        final = None
-    store_music(ev["id"], main["id"] if main else None, final["id"] if final else None)
-    return {"main": main, "final": final}
+def pick_tracks(ev, rep, st) -> list[dict]:
+    """Morceaux du film [{"role", "track"}] : ceux enregistrés (pré-écoute) s'ils existent et restent permis
+    pour leur rôle, les rôles manquants choisis par music.plan_tracks. Le choix est enregistré dans reports.music."""
+    chosen = music.plan_tracks(ai._tones(ev), st, keep=stored_tracks(rep))
+    store_music(ev["id"], {c["role"]: c["track"]["id"] for c in chosen})
+    return chosen
 
 
-def _credits(*tracks) -> list[str]:
+def lead(chosen: list[dict]) -> dict | None:
+    """Morceau qui porte le film (celui qui joue le plus longtemps) : le principal ; sans principal,
+    le pic (« calme puis explosion » : de 40 % à la fin) ; sinon le premier."""
+    by = {c["role"]: c["track"] for c in chosen}
+    return by.get("main") or by.get("peak") or (chosen[0]["track"] if chosen else None)
+
+
+def _credits(tracks) -> list[str]:
     return [t["credit"] for t in tracks if t and (t["credit"] or "").strip()]
 
 
-def _tracks(chosen) -> dict:
-    """Fichiers et crédits pour video.render / mix_music ; main_credits sert si le morceau final ne passe pas."""
-    main, final = chosen["main"], chosen["final"]
-    return {"main": music.path(main) if main else None, "final": music.path(final) if final else None,
-            "credits": _credits(main, final), "main_credits": _credits(main)}
+def _tracks(chosen) -> list[dict]:
+    """Fichiers et crédits pour video.render."""
+    return [{"role": c["role"], "path": music.path(c["track"]), "credit": c["track"]["credit"]} for c in chosen]
 
 
-def style(st: dict, chosen: dict) -> video.Style:
-    """Rythme, effets et style des cartons des réglages ; tempo du morceau principal choisi (s'il est connu)."""
-    main = chosen.get("main")
-    return video.Style.of(st, bpm=main.get("bpm") if main else None)
+def _played(chosen, meta: dict, evolution: str) -> list[dict]:
+    """Morceaux réellement joués dans le film monté, avec leur début (mêmes règles que video.render)."""
+    by = {c["role"]: c for c in chosen}
+    return [{**by[r], "start": s} for r, s in video.place_tracks(
+        list(by), video.meta_sections(meta), meta.get("body"), evolution)]
+
+
+def style(st: dict, chosen: list[dict]) -> video.Style:
+    """Rythme, effets et style des cartons des réglages ; tempo du morceau qui porte le film (s'il est connu)."""
+    t = lead(chosen)
+    return video.Style.of(st, bpm=t.get("bpm") if t else None)
 
 
 def render_video(ev, rep, prog, lo, hi):
@@ -166,11 +173,11 @@ def render_video(ev, rep, prog, lo, hi):
     out = out_dir(ev["id"]) / "video.mp4"
     video.render(segs, items, out, _tracks(chosen), st["mix"],
                  video.frame_for(st.get("framing")), style(st, chosen),
-                 on_progress=lambda f: prog("montage", lo + (hi - lo) * f, "Montage de la vidéo"))
-    meta = video.read_meta(out.parent / video.BASE) or {}
-    if chosen["final"] and not video.final_fits(meta.get("final_from"), meta.get("body")):
-        # pas de séquence finale assez longue : le morceau final n'a été ni joué ni crédité
-        store_music(ev["id"], chosen["main"]["id"] if chosen["main"] else None, None)
+                 on_progress=lambda f: prog("montage", lo + (hi - lo) * f, "Montage de la vidéo"),
+                 evolution=st["evolution"])
+    # un morceau sans place (séquence trop courte, pas de séquence finale) n'a été ni joué ni crédité
+    played = _played(chosen, video.read_meta(out.parent / video.BASE) or {}, st["evolution"])
+    store_music(ev["id"], {p["role"]: p["track"]["id"] for p in played})
     db.update("reports", "event_id", ev["id"], video_ready=1, montage=json.dumps(segs, ensure_ascii=False))
 
 
@@ -185,14 +192,13 @@ def remix(ev, prog):
     meta = video.read_meta(base)
     prog("musique", 0.2, "Changement de la musique")
     st = video_settings(ev, rep)
-    chosen = pick_tracks(ev, rep, st)
-    if chosen["final"] and not video.final_fits(meta.get("final_from"), meta.get("body")):
-        chosen = {**chosen, "final": None}  # pas de séquence finale assez longue : ni jouée ni créditée
-        store_music(ev["id"], chosen["main"]["id"] if chosen["main"] else None, None)
-    tracks = _tracks(chosen)
-    video.recredit(base, tracks["credits"])
+    # placés sur les débuts de séquence enregistrés au rendu ; un morceau sans place n'est ni joué ni crédité
+    played = _played(pick_tracks(ev, rep, st), meta, st["evolution"])
+    store_music(ev["id"], {p["role"]: p["track"]["id"] for p in played})
+    video.recredit(base, _credits([p["track"] for p in played]))
     prog("musique", 0.6, "Mélange de la musique")
-    video.mix_music(base, d / "video.mp4", tracks, st["mix"], meta.get("final_from"))
+    video.mix_music(base, d / "video.mp4", [{"path": music.path(p["track"]), "start": p["start"]} for p in played],
+                    st["mix"])
     db.update("reports", "event_id", ev["id"], video_ready=1)
 
 

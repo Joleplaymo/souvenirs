@@ -223,3 +223,62 @@ def test_fetch_missing_default_threshold_rejects_small_files(tmp_path, monkeypat
     res = music.fetch_missing(dest=tmp_path / "lib", delay=0, opener=lambda req, timeout=None: FakeResp(b"mp3data"))
     assert res == {"ok": 0, "skipped": 0, "failed": 1}
     assert list((tmp_path / "lib").iterdir()) == []
+
+
+# ------------------------------------------------------------------ évolution sur plusieurs morceaux
+
+def _roles(plan):
+    return {p["role"]: p["track"] for p in plan}
+
+
+def test_plan_tracks_montee_three_roles(lib):
+    lib([entry("doux", "joyeux", ["funk"], 3), entry("moyen", "joyeux", ["funk"], 4),
+         entry("fort", "festif", ["funk"], 5)])
+    st = {**settings.defaults("weekend"), "evolution": "montee", "energy": 4}
+    plan = music.plan_tracks(["drole", "festif"], st)
+    assert [p["role"] for p in plan] == ["intro", "main", "peak"]
+    assert [p["track"]["energy"] for p in plan] == [3, 4, 5]
+    # constante : un seul morceau ; calme puis explosion : intro calme (1 ou 2) puis pic à 5
+    assert [p["role"] for p in music.plan_tracks(["drole"], {**st, "evolution": "constante"})] == ["main"]
+    lib([entry("calme", "calme", ["funk"], 2), entry("moyen", "joyeux", ["funk"], 4),
+         entry("fort", "festif", ["funk"], 5)])
+    got = _roles(music.plan_tracks(["drole"], {**st, "evolution": "calme_explosion"}))
+    assert set(got) == {"intro", "peak"} and got["intro"]["key"] == "calme" and got["peak"]["key"] == "fort"
+
+
+def test_festif_emotion_final_may_be_melancholic(lib):
+    lib([entry("gai", "joyeux", ["funk"], 4), entry("mel-fort", "melancolique", ["funk"], 4),
+         entry("mel-doux", "melancolique", ["piano"], 1)])
+    tones = ["drole"]
+    st = {**settings.defaults("anniversaire"), "evolution": "festif_emotion", "ending": "festive", "energy": 4}
+    got = _roles(music.plan_tracks(tones, st))
+    assert got["main"]["key"] == "gai" and got["final"]["key"] == "mel-doux"
+    # seul le rôle final accepte la mélancolie, et seulement en festif → émotion (ou fin touchante)
+    mel = music.get_by_key("mel-doux")
+    assert music.allowed(mel, tones, True, "festive", "festif_emotion")
+    assert not music.allowed(mel, tones, False, "festive", "festif_emotion")
+    assert not music.allowed(mel, tones, True, "festive", "montee")
+    for evo in ("constante", "montee", "calme_explosion"):
+        plan = music.plan_tracks(tones, {**st, "evolution": evo})
+        assert all(p["track"]["mood"] != "melancolique" for p in plan), evo
+    # catalogue sans morceau gai : pas de morceau final seul (film sans musique)
+    lib([entry("mel-doux", "melancolique", ["piano"], 1)])
+    db.run("DELETE FROM tracks WHERE key NOT IN ('mel-doux')")
+    assert music.plan_tracks(tones, st) == []
+
+
+def test_plan_tracks_never_repeats(lib):
+    lib([entry("seul", "joyeux", ["funk"], 4)])
+    st = {**settings.defaults("weekend"), "evolution": "montee", "ending": "touchante", "energy": 4}
+    plan = music.plan_tracks(["drole"], st)
+    assert [p["role"] for p in plan] == ["main"]
+    lib([entry("a", "joyeux", ["funk"], 4), entry("b", "joyeux", ["funk"], 4), entry("c", "joyeux", ["funk"], 3),
+         entry("d", "calme", ["piano"], 1)])
+    plan = music.plan_tracks(["drole"], st)
+    ids = [p["track"]["id"] for p in plan]
+    assert len(ids) == len(set(ids)) == 4
+    # exclusion par rôle (« Autre titre »)
+    main = _roles(plan)["main"]["id"]
+    other = _roles(music.plan_tracks(["drole"], st, exclude={"main": [main]}))
+    assert other["main"]["id"] != main
+    assert len({t["id"] for t in other.values()}) == len(other)
