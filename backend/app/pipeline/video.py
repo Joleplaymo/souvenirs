@@ -1,8 +1,9 @@
-"""Montage vidéo FFmpeg à partir du plan de montage (1920×1080, H.264 + AAC, lisible partout)."""
+"""Montage vidéo FFmpeg à partir du plan de montage (16:9, 9:16 ou 1:1, H.264 + AAC, lisible partout)."""
 import json
 import re
 import shutil
 import textwrap
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -10,7 +11,28 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from . import media
 
-W, H, FPS = 1920, 1080, 30
+FPS = 30
+
+
+@dataclass(frozen=True)
+class Frame:
+    """Dimensions du film. Tailles de police et marges sont proportionnelles au petit côté (1080 = référence)."""
+    w: int
+    h: int
+
+    @property
+    def k(self) -> float:
+        return min(self.w, self.h) / 1080
+
+
+DEFAULT_FRAME = Frame(1920, 1080)
+FRAMES = {"16:9": Frame(1920, 1080), "9:16": Frame(1080, 1920), "1:1": Frame(1080, 1080)}
+
+
+def frame_for(framing: str) -> Frame:
+    return FRAMES.get(framing, FRAMES["16:9"])
+
+
 ENC = ["-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
        "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k", "-video_track_timescale", "15360"]
 SILENCE = ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
@@ -35,44 +57,69 @@ def _font(kind, size):
     return ImageFont.truetype(font_path(kind), size)
 
 
-def title_card(text: str, out: Path):
+def _wrap_px(d, text: str, f, maxw: float) -> list[str]:
+    """Retour à la ligne au mot près pour que chaque ligne tienne dans maxw pixels."""
+    lines, cur = [], ""
+    for word in text.split():
+        t = (cur + " " + word).strip()
+        if cur and d.textlength(t, font=f) > maxw:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = t
+    return lines + ([cur] if cur else [])
+
+
+def title_card(text: str, out: Path, frame: Frame = DEFAULT_FRAME):
+    W, H, k = frame.w, frame.h, frame.k
     img = Image.new("RGB", (W, H), "#2a1c14")
     d = ImageDraw.Draw(img)
     for y in range(H):  # léger dégradé chaud
-        k = y / H
-        d.line([(0, y), (W, y)], fill=(int(58 - 26 * k), int(38 - 16 * k), int(26 - 10 * k)))
-    lines = [ln for par in text.strip().split("\n") for ln in (textwrap.wrap(par, 26) or [""])] or [""]
-    size = 96 if len(lines) <= 2 else 76 if len(lines) <= 6 else 56
-    f = _font("serif", size)
-    total = len(lines) * int(size * 1.25)
-    y = (H - total) // 2
-    d.line([(W // 2 - 70, y - 40), (W // 2 + 70, y - 40)], fill="#e0a458", width=4)
+        c = y / H
+        d.line([(0, y), (W, y)], fill=(int(58 - 26 * c), int(38 - 16 * c), int(26 - 10 * c)))
+    paras = [ln for par in text.strip().split("\n") for ln in (textwrap.wrap(par, 26) or [""])] or [""]
+    size = 96 if len(paras) <= 2 else 76 if len(paras) <= 6 else 56
+    maxw, maxh = W * 0.84, H * 0.7
+    while True:  # on rétrécit jusqu'à ce que le texte tienne dans le cadre
+        f = _font("serif", max(12, int(size * k)))
+        lines = [sub for ln in paras for sub in (_wrap_px(d, ln, f, maxw) or [""])]
+        if (len(lines) * int(size * k * 1.25) <= maxh and all(d.textlength(ln, font=f) <= maxw for ln in lines))                 or size <= 24:
+            break
+        size -= 4
+    lh = int(size * k * 1.25)
+    y = (H - len(lines) * lh) // 2
+    bar = int(70 * k)
+    d.line([(W // 2 - bar, y - int(40 * k)), (W // 2 + bar, y - int(40 * k))], fill="#e0a458", width=max(2, int(4 * k)))
     for ln in lines:
         w = d.textlength(ln, font=f)
         d.text(((W - w) / 2, y), ln, font=f, fill="#f7ecd9")
-        y += int(size * 1.25)
-    d.line([(W // 2 - 70, y + 24), (W // 2 + 70, y + 24)], fill="#e0a458", width=4)
+        y += lh
+    d.line([(W // 2 - bar, y + int(24 * k)), (W // 2 + bar, y + int(24 * k))], fill="#e0a458", width=max(2, int(4 * k)))
     img.save(out)
 
 
-def subtitle_png(text: str, out: Path):
+def subtitle_png(text: str, out: Path, frame: Frame = DEFAULT_FRAME):
+    W, H, k = frame.w, frame.h, frame.k
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    f = _font("sans", 46)
+    f = _font("sans", max(10, int(46 * k)))
+    pad = 72 * k
     lines = textwrap.wrap(text.strip(), 52)[:3]
-    lh = 60
+    if any(d.textlength(ln, font=f) + pad > W * 0.94 for ln in lines):  # cadre étroit : on recoupe à la largeur
+        lines = _wrap_px(d, text.strip(), f, W * 0.94 - pad)[:4]
+    lh = int(60 * k)
     widths = [d.textlength(ln, font=f) for ln in lines]
-    bw, bh = max(widths) + 72, lh * len(lines) + 36
-    x0, y0 = (W - bw) / 2, H - 90 - bh
-    d.rounded_rectangle([x0, y0, x0 + bw, y0 + bh], radius=22, fill=(20, 14, 10, 175))
+    bw, bh = max(widths) + pad, lh * len(lines) + 36 * k
+    x0, y0 = (W - bw) / 2, H - 90 * k - bh
+    d.rounded_rectangle([x0, y0, x0 + bw, y0 + bh], radius=22 * k, fill=(20, 14, 10, 175))
     for i, ln in enumerate(lines):
-        d.text(((W - widths[i]) / 2, y0 + 16 + i * lh), ln, font=f, fill="#fff8ec")
+        d.text(((W - widths[i]) / 2, y0 + 16 * k + i * lh), ln, font=f, fill="#fff8ec")
     img.save(out)
 
 
-def photo_canvas(src: Path, out: Path):
+def photo_canvas(src: Path, out: Path, frame: Frame = DEFAULT_FRAME):
     """Photo centrée sur un fond flouté, un peu plus grande que l'image finale pour le zoom lent."""
-    cw, ch = 2880, 1620
+    cw, ch = frame.w * 3 // 2, frame.h * 3 // 2
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
         bg = ImageOps.fit(im, (cw // 8, ch // 8)).filter(ImageFilter.GaussianBlur(6)).resize((cw, ch))
@@ -127,23 +174,24 @@ def normalize(plan: dict, items: dict, target: int) -> list[dict]:
     return segs
 
 
-def _render_segment(seg, item, tmp: Path, idx: int) -> Path:
+def _render_segment(seg, item, tmp: Path, idx: int, frame: Frame = DEFAULT_FRAME) -> Path:
+    W, H = frame.w, frame.h
     out = tmp / f"seg{idx:04d}.mp4"
     dur = seg["duration"]
     fade = f"fade=t=in:st=0:d=0.3,fade=t=out:st={max(0, dur - 0.3):.2f}:d=0.3"
     sub = None
     if seg["type"] != "title" and seg.get("text"):
         sub = tmp / f"sub{idx:04d}.png"
-        subtitle_png(seg["text"], sub)
+        subtitle_png(seg["text"], sub, frame)
     if seg["type"] == "title":
         card = tmp / f"card{idx:04d}.png"
-        title_card(seg["text"], card)
+        title_card(seg["text"], card, frame)
         media.sh(["ffmpeg", "-y", "-loop", "1", "-t", f"{dur}", "-i", str(card), *SILENCE,
                   "-vf", fade + ",format=yuv420p", "-t", f"{dur}", *ENC, str(out)])
     elif seg["type"] == "photo":
         src = media.derived(item["event_id"], item["id"], "d")
         canvas = tmp / f"canvas{idx:04d}.jpg"
-        photo_canvas(src, canvas)
+        photo_canvas(src, canvas, frame)
         n = int(dur * FPS)
         zoom = (f"zoompan=z='1+0.07*on/{n}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={n}:s={W}x{H}:fps={FPS}")
         args = ["ffmpeg", "-y", "-i", str(canvas)]
@@ -215,9 +263,11 @@ def read_meta(base: Path) -> dict | None:
         return None
 
 
-def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, on_progress=None) -> float:
+def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, frame: Frame | None = None,
+           style=None, on_progress=None) -> float:
     """Assemble les segments (+ carton de crédit) dans video_base.mp4, puis y mélange la musique dans `out`.
     tracks = {"main": Path | None, "final": Path | None, "credits": [str]}. Retourne la durée finale."""
+    frame = frame or DEFAULT_FRAME
     if not segs:
         raise RuntimeError("Le plan de montage est vide : il faut au moins une photo ou une vidéo.")
     tmp = out.parent / "tmp_video"
@@ -227,7 +277,7 @@ def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, on_
         files, t, final_from = [], 0.0, None
         for i, seg in enumerate(segs):
             try:
-                f = _render_segment(seg, items.get(seg["item_id"]), tmp, i)
+                f = _render_segment(seg, items.get(seg["item_id"]), tmp, i, frame)
             except Exception as e:  # un extrait illisible ne doit pas faire échouer tout le montage
                 print(f"[montage] segment {i} ignoré : {e}", flush=True)
                 f = None
@@ -244,13 +294,14 @@ def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, on_
             tracks = {**tracks, "final": None, "credits": tracks.get("main_credits", tracks.get("credits"))}
         credits = credit_lines(tracks.get("credits"))
         if credits:
-            files.append(_render_segment(credit_segment(credits), None, tmp, len(segs)))
+            files.append(_render_segment(credit_segment(credits), None, tmp, len(segs), frame))
         joined = tmp / "joined.mp4"
         _concat(files, tmp / "list.txt", joined)
         base = out.parent / BASE
         joined.replace(base)
         (out.parent / META).write_text(json.dumps({"final_from": final_from, "body": round(t, 3),
-                                                   "credits": credits}, ensure_ascii=False), encoding="utf-8")
+                                                   "credits": credits, "w": frame.w, "h": frame.h},
+                                                  ensure_ascii=False), encoding="utf-8")
         mix_music(base, out, tracks, mix, final_from)
         return media.probe(base)["duration"] or 0
     finally:
@@ -274,7 +325,8 @@ def recredit(base: Path, credits: list[str]):
             shutil.copy2(base, body)
         files = [body]
         if credits:
-            files.append(_render_segment(credit_segment(credits), None, tmp, 0))
+            files.append(_render_segment(credit_segment(credits), None, tmp, 0,
+                                            Frame(meta.get("w") or 1920, meta.get("h") or 1080)))
         new = tmp / "base.mp4"
         _concat(files, tmp / "list.txt", new)
         new.replace(base)

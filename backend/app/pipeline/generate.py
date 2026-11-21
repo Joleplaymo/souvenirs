@@ -159,7 +159,8 @@ def render_video(ev, rep, prog, lo, hi):
     chosen = pick_tracks(ev, rep, st)
     out = out_dir(ev["id"]) / "video.mp4"
     video.render(segs, items, out, _tracks(chosen), st["mix"],
-                 lambda f: prog("montage", lo + (hi - lo) * f, "Montage de la vidéo"))
+                 video.frame_for(st.get("framing")), None,
+                 on_progress=lambda f: prog("montage", lo + (hi - lo) * f, "Montage de la vidéo"))
     meta = video.read_meta(out.parent / video.BASE) or {}
     if chosen["final"] and not video.final_fits(meta.get("final_from"), meta.get("body")):
         # pas de séquence finale assez longue : le morceau final n'a été ni joué ni crédité

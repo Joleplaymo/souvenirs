@@ -35,8 +35,7 @@ def sines(tmp_path_factory):
 @pytest.fixture(autouse=True)
 def small(monkeypatch):
     """Rendu minuscule pour des tests rapides."""
-    monkeypatch.setattr(video, "W", 320)
-    monkeypatch.setattr(video, "H", 180)
+    monkeypatch.setattr(video, "DEFAULT_FRAME", video.Frame(320, 180))
 
 
 @pytest.fixture
@@ -99,9 +98,9 @@ def spy_titles(monkeypatch):
     calls = []
     orig = video.title_card
 
-    def spy(text, out):
+    def spy(text, out, *a, **k):
         calls.append(text)
-        return orig(text, out)
+        return orig(text, out, *a, **k)
 
     monkeypatch.setattr(video, "title_card", spy)
     return calls
