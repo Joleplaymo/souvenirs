@@ -125,3 +125,87 @@ def test_mp3_route_unknown_and_missing_file():
     tid = db.insert("tracks", key="lib-nofile", title="X", artist="", license="", source_url="", credit="",
                     genres="pop", energy=3, mood="joyeux", file="absent.mp3", origin="library", created_at=db.now())
     assert client.get(f"/api/music/{tid}.mp3").status_code == 404
+
+
+# ------------------------------------------------------------------ pré-écoute
+import json  # noqa: E402
+import secrets  # noqa: E402
+
+NO_MUSIC = "Aucune musique ne correspond à ces réglages : le film sera sans musique."
+
+
+@pytest.fixture
+def pick_lib(tmp_path, monkeypatch, mp3):
+    mdir = tmp_path / "music"
+    mdir.mkdir()
+    monkeypatch.setattr(config, "MUSIC_DIR", mdir)
+    db.init()
+    db.run("DELETE FROM tracks")
+
+    def make(keys):
+        entries = []
+        for k in keys:
+            (mdir / f"{k}.mp3").write_bytes(mp3)
+            entries.append(dict(key=k, title=k, artist="A", license="CC BY 4.0", source_url="", credit="",
+                                genres=["funk"], energy=4, mood="joyeux", bpm=100, file=f"{k}.mp3"))
+        (mdir / "catalogue.json").write_text(json.dumps(entries), encoding="utf-8")
+        music.sync_catalogue()
+
+    return make
+
+
+def _event(tone="drole,festif", typ="weekend"):
+    slug = "pk-" + secrets.token_hex(4)
+    db.insert("events", slug=slug, admin_token="adm-" + slug, name="Week-end", start_date="2026-05-01",
+              end_date="2026-05-01", type=typ, tone=tone, tz="Europe/Paris", created_at=db.now())
+    return slug, {"x-admin-token": "adm-" + slug}
+
+
+def _pick(slug, headers, **body):
+    return client.post(f"/api/events/{slug}/music/pick", json=body, headers=headers)
+
+
+def _rep(slug):
+    return db.report(db.one("SELECT * FROM events WHERE slug=?", slug)["id"])
+
+
+def test_preview_returns_and_stores_pick(pick_lib):
+    pick_lib(["p1", "p2"])
+    slug, h = _event()
+    r = _pick(slug, h, tones=None, video_settings={"duration": 60, "genres": ["funk"]}, exclude=[])
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["main"]["id"] and j["main"]["url"] == f"/api/music/{j['main']['id']}.mp3" and j["message"] == ""
+    rep = _rep(slug)
+    assert json.loads(rep["music"])["main_id"] == j["main"]["id"]
+    assert json.loads(rep["video_settings"])["duration"] == 60
+
+
+def test_preview_other_title_uses_exclude(pick_lib):
+    pick_lib(["p1", "p2"])
+    slug, h = _event()
+    first = _pick(slug, h, video_settings={}, exclude=[]).json()["main"]["id"]
+    second = _pick(slug, h, video_settings={}, exclude=[first]).json()["main"]["id"]
+    assert second != first
+    assert json.loads(_rep(slug)["music"])["main_id"] == second
+
+
+def test_preview_empty_catalogue_message(pick_lib):
+    pick_lib([])
+    slug, h = _event()
+    r = _pick(slug, h, video_settings={}, exclude=[])
+    assert r.status_code == 200
+    assert r.json() == {"main": None, "final": None, "message": NO_MUSIC}
+    assert json.loads(_rep(slug)["music"]) == {"main_id": None, "final_id": None}
+
+
+def test_preview_validation_and_auth(pick_lib):
+    pick_lib(["p1"])
+    slug, h = _event()
+    assert _pick(slug, {}, video_settings={}).status_code in (401, 403)
+    assert _pick(slug, {"x-admin-token": "nope"}, video_settings={}).status_code in (401, 403)
+    assert _pick(slug, h, tones=["a", "b", "c"]).status_code == 400
+    assert _pick(slug, h, exclude="1").status_code == 400
+    assert _pick(slug, h, exclude=[True]).status_code == 400
+    assert _pick(slug, h, video_settings="x").status_code == 400
+    assert _pick(slug, h, tones=["festif"], video_settings={}).status_code == 200

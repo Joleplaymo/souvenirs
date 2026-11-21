@@ -492,6 +492,40 @@ def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Heade
     return {"job_id": jid}
 
 
+NO_MUSIC_MSG = "Aucune musique ne correspond à ces réglages : le film sera sans musique."
+
+
+@app.post("/api/events/{slug}/music/pick")
+def pick_music(slug: str, body: dict = Body(default={}), x_admin_token: str = Header(None)):
+    """Pré-écoute : choisit le morceau (et celui de la fin) pour ces réglages et le mémorise."""
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    if body.get("tones") is None:
+        tones = _tones(ev["tone"], ev["type"])
+    else:
+        if not isinstance(body["tones"], (list, str)):
+            err(400, "Tons invalides.")
+        try:
+            tones = settings.parse_tones(body["tones"])
+        except ValueError as e:
+            err(400, str(e))
+    raw = body.get("video_settings")
+    if raw is not None and not isinstance(raw, dict):
+        err(400, "Réglages vidéo invalides.")
+    vs = settings.normalize(raw, ev["type"])
+    exclude = body.get("exclude") or []
+    if not isinstance(exclude, list) or any(type(i) is not int for i in exclude):
+        err(400, "Liste de morceaux à exclure invalide.")
+    got = music_mod.choose(tones, vs, exclude=exclude)
+    main, final = got["main"], got["final"]
+    db.report(ev["id"])
+    db.update("reports", "event_id", ev["id"], video_settings=json.dumps(vs, ensure_ascii=False),
+              video_duration=vs["duration"],
+              music=json.dumps({"main_id": main["id"] if main else None, "final_id": final["id"] if final else None}))
+    return {"main": music_mod.public(main) if main else None, "final": music_mod.public(final) if final else None,
+            "message": "" if main else NO_MUSIC_MSG}
+
+
 @app.get("/api/events/{slug}/job")
 def job_status(slug: str, x_admin_token: str = Header(None)):
     ev = get_event(slug)
