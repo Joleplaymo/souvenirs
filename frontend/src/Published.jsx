@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, fmtDates, mediaUrl } from "./api.js";
 import Markdown from "./Markdown.jsx";
+import Film from "./Film.jsx";
 
 // Crédit des morceaux du film (licence CC BY : obligatoire), sous le lecteur.
 export function MusicCredits({ credits }) {
@@ -68,7 +69,7 @@ export default function Published({ slug, ev }) {
       {chosen !== 0 && !alt ? <p className="muted center">Chargement de la version…</p> : <>
       {c.has_video && (
         <section className="film">
-          <video key={c.video} controls playsInline preload="metadata" src={`${c.video}#t=1.2`} />
+          <Film key={c.video} src={`${c.video}#t=1.2`} />
           <MusicCredits credits={c.credits} />
         </section>
       )}

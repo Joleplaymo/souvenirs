@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { api, tokens } from "./api.js";
 import Markdown from "./Markdown.jsx";
+import Film from "./Film.jsx";
 import { MusicCredits } from "./Published.jsx";
 
 function when(iso) {
@@ -103,7 +104,7 @@ export default function Versions({ slug, busy, published, refresh, beforeSave, o
             </div>
             <p className="muted small">{view.tone_label} · {view.type_label} · {when(view.created_at)}</p>
             {view.video_prompt && <p className="muted small">Consignes du film : « {view.video_prompt} »</p>}
-            {view.has_video && <video controls playsInline preload="metadata" src={file(view, "video.mp4") + "#t=1.2"} />}
+            {view.has_video && <Film key={view.id} src={file(view, "video.mp4") + "#t=1.2"} />}
             {view.has_video && <MusicCredits credits={view.music_credits} />}
             {view.has_album && <p><a className="btn" href={file(view, "album.pdf")} target="_blank" rel="noreferrer">📕 Ouvrir l'album (PDF)</a></p>}
             <div className="v-text"><Markdown text={view.text_md} /></div>

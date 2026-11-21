@@ -3,7 +3,8 @@ import { api, mediaUrl, tokens, fmtTime, fmtDur, KIND } from "./api.js";
 import Markdown from "./Markdown.jsx";
 import Versions from "./Versions.jsx";
 import { useJob, JobProgress } from "./Generate.jsx";
-import MusicPreview from "./MusicPreview.jsx";
+import MusicPreview, { musicRoles } from "./MusicPreview.jsx";
+import Film from "./Film.jsx";
 import { Toast } from "./App.jsx";
 
 const SEG = { title: "🔤 Titre", photo: "📷 Photo", video: "🎥 Extrait" };
@@ -49,13 +50,15 @@ export default function Review({ slug, ev, reload, goGenerate }) {
     if (part === "text" && !confirm("Régénérer le texte remplacera tes corrections. Continuer ?")) return;
     act(() => api(`/events/${slug}/generate`, { slug, method: "POST", body: { parts: [part], video_duration: d.video_duration } }), `${label} : régénération lancée`);
   };
-  const current = (d && d.music) || { main: null, final: null }; // musique du film actuel
-  const sameMusic = !!(newMusic && newMusic.main && current.main && newMusic.main.id === current.main.id
-    && (newMusic.final ? newMusic.final.id : null) === (current.final ? current.final.id : null));
-  const canChangeMusic = !!(newMusic && !newMusic.error && newMusic.main) && !sameMusic; // seulement ce qui est affiché et écouté
+  const current = musicRoles(d && d.music); // musique du film actuel, { rôle: id }
+  const proposed = musicRoles(newMusic);
+  const hasProposal = !!(newMusic && !newMusic.error && Object.keys(proposed).length);
+  const sameMusic = hasProposal && Object.keys(proposed).length === Object.keys(current).length
+    && Object.entries(proposed).every(([r, id]) => current[r] === id);
+  const canChangeMusic = hasProposal && !sameMusic; // seulement ce qui est affiché et écouté
   const changeMusic = () => {
     if (!canChangeMusic) return;
-    const body = { parts: ["music"], music: { main_id: newMusic.main.id, final_id: newMusic.final ? newMusic.final.id : null } };
+    const body = { parts: ["music"], music: { roles: proposed } };
     setChanging(false);
     act(() => api(`/events/${slug}/generate`, { slug, method: "POST", body }), "Musique : changement lancé");
   };
@@ -117,7 +120,7 @@ export default function Review({ slug, ev, reload, goGenerate }) {
               <button className="btn" onClick={() => regen("video", "Film")} disabled={busy}>Régénérer</button>
             </div>
             {d.video_prompt && <p className="muted small">Consignes : « {d.video_prompt.length > 160 ? d.video_prompt.slice(0, 160) + "…" : d.video_prompt} » <button className="link" onClick={goGenerate}>Modifier</button></p>}
-            {d.video_ready ? <video key={stamp} controls playsInline preload="metadata" src={out("video.mp4") + "#t=1.2"} /> : <p className="muted">{busy ? "Montage en cours…" : "Pas encore de film."}</p>}
+            {d.video_ready ? <Film key={stamp} framing={d.video_settings && d.video_settings.framing} src={out("video.mp4") + "#t=1.2"} /> : <p className="muted">{busy ? "Montage en cours…" : "Pas encore de film."}</p>}
             {d.video_ready && !changing && (d.can_remix ? (
               <p><button className="btn" onClick={() => { setNewMusic(undefined); setChanging(true); }} disabled={busy}>🎵 Changer la musique</button></p>
             ) : (
@@ -126,10 +129,10 @@ export default function Review({ slug, ev, reload, goGenerate }) {
             {changing && (
               <div className="change-music">
                 <MusicPreview slug={slug} tones={ev.tones} settings={d.video_settings} disabled={busy} onChange={setNewMusic}
-                  initialExclude={current.main ? [current.main.id] : []} />
-                {newMusic && !newMusic.error && !newMusic.main && <p className="muted small">Rien à proposer pour ces réglages : le film garde sa musique actuelle.</p>}
+                  initialExclude={Object.fromEntries(Object.entries(current).map(([r, id]) => [r, [id]]))} />
+                {newMusic && !newMusic.error && !hasProposal && <p className="muted small">Rien à proposer pour ces réglages : le film garde sa musique actuelle.</p>}
                 {sameMusic && <p className="muted small">C'est déjà la musique du film : essaie « Autre titre ».</p>}
-                <p className="muted small">Seule la bande-son change : les plans, le texte et l'album restent les mêmes. Pour changer de genre, d'énergie ou de fin, passe par l'écran Générer.</p>
+                <p className="muted small">Seule la bande-son change : les plans, le texte et l'album restent les mêmes. Pour changer de genre, d'énergie, d'évolution ou de fin, passe par l'écran Générer.</p>
                 <div className="row">
                   <button className="btn" onClick={() => setChanging(false)}>Annuler</button>
                   <button className="btn primary" onClick={changeMusic} disabled={busy || !canChangeMusic}>Utiliser cette musique</button>
