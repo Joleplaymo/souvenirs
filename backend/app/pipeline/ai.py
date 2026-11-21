@@ -256,7 +256,8 @@ def _local_album(ev, photos) -> dict:
 MONTAGE_SCHEMA = _obj({"segments": {"type": "array", "items": _obj({
     "type": {"type": "string", "enum": ["title", "photo", "video"]},
     "item_id": {"type": "integer"}, "text": {"type": "string"},
-    "start": {"type": "number"}, "end": {"type": "number"}, "duration": {"type": "number"}})}})
+    "start": {"type": "number"}, "end": {"type": "number"}, "duration": {"type": "number"},
+    "effect": {"type": "string", "enum": ["none", "slowmo", "speedup", "freeze", "punch"]}})}})
 
 
 def montage_prompt(ev, settings: dict, target: int) -> str:

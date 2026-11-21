@@ -240,6 +240,32 @@ def test_subtitles_off_clears_quotes_but_keeps_titles(lib, monkeypatch):
         assert [s["text"] for s in segs] == ["Samedi", quote]
 
 
+def test_montage_follows_rhythm_and_main_track_bpm(lib, monkeypatch):
+    """Durées calées sur le tempo du morceau principal (100 bpm : 0,6 s) ; le rendu reçoit le même style."""
+    lib([entry("a")])
+    ev = make_event()
+    item = db.one("SELECT * FROM items WHERE event_id=?", ev["id"])
+    plan = {"segments": [{"type": "title", "item_id": 0, "text": "Samedi", "duration": 2.5, "effect": "none"},
+                         {"type": "photo", "item_id": item["id"], "text": "", "duration": 2.2, "effect": "punch"}]}
+    monkeypatch.setattr(generate.ai, "plan_montage", lambda *a, **k: json.loads(json.dumps(plan)))
+    styles = []
+    orig = video.render
+
+    def spy(*a, **k):
+        styles.append(a[6] if len(a) > 6 else k.get("style"))
+        return orig(*a, **k)
+
+    monkeypatch.setattr(video, "render", spy)
+    db.update("reports", "event_id", ev["id"],
+              video_settings=json.dumps({**settings.defaults("weekend"), "rhythm": "dynamique",
+                                         "effects": {"slowmo": True, "speedup": True, "freeze": True, "humor": True}}))
+    run_job(ev, parts=["video"])
+    segs = json.loads(db.report(ev["id"])["montage"])
+    assert [s["duration"] for s in segs] == [2.4, 2.4]
+    assert segs[1]["effect"] == "punch"
+    assert styles and styles[0].rhythm == "dynamique" and styles[0].bpm == 100
+
+
 def test_legacy_report_without_settings_generates(lib):
     """Données d'avant cette PR : ton et type anciens migrés, video_settings et music à NULL."""
     lib([entry("a")])

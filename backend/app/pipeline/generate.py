@@ -150,6 +150,12 @@ def _tracks(chosen) -> dict:
             "credits": _credits(main, final), "main_credits": _credits(main)}
 
 
+def style(st: dict, chosen: dict) -> video.Style:
+    """Rythme, effets et style des cartons des réglages ; tempo du morceau principal choisi (s'il est connu)."""
+    main = chosen.get("main")
+    return video.Style.of(st, bpm=main.get("bpm") if main else None)
+
+
 def render_video(ev, rep, prog, lo, hi):
     items = {it["id"]: it for it in timeline.load_items(ev["id"])}
     segs = [s for s in db.jl(rep["montage"], []) if s["item_id"] == 0 or s["item_id"] in items]
@@ -159,7 +165,7 @@ def render_video(ev, rep, prog, lo, hi):
     chosen = pick_tracks(ev, rep, st)
     out = out_dir(ev["id"]) / "video.mp4"
     video.render(segs, items, out, _tracks(chosen), st["mix"],
-                 video.frame_for(st.get("framing")), None,
+                 video.frame_for(st.get("framing")), style(st, chosen),
                  on_progress=lambda f: prog("montage", lo + (hi - lo) * f, "Montage de la vidéo"))
     meta = video.read_meta(out.parent / video.BASE) or {}
     if chosen["final"] and not video.final_fits(meta.get("final_from"), meta.get("body")):
@@ -237,9 +243,12 @@ def generate(job):
         by_id = {it["id"]: it for it in items}
         if "video" in parts:
             prog("montage", 0.6, "Choix des meilleurs moments")
-            plan = ai.plan_montage(ev, report_md, items, target, rep["video_prompt"] or "", video_settings(ev, rep))
-            segs = video.normalize(plan, by_id, target)
-            if not video_settings(ev, rep)["subtitles"]:  # sous-titres désactivés : seuls les cartons gardent du texte
+            st = video_settings(ev, rep)
+            plan = ai.plan_montage(ev, report_md, items, target, rep["video_prompt"] or "", st)
+            # morceaux choisis avant de normaliser : les durées se calent sur le tempo du morceau principal
+            # (choix enregistré dans reports.music, repris tel quel par render_video)
+            segs = video.normalize(plan, by_id, target, style(st, pick_tracks(ev, rep, st)))
+            if not st["subtitles"]:  # sous-titres désactivés : seuls les cartons gardent du texte
                 for s in segs:
                     if s["type"] in ("photo", "video"):
                         s["text"] = ""
