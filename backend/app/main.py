@@ -441,21 +441,52 @@ def _active_job(event_id):
                   "ORDER BY id DESC LIMIT 1", event_id)
 
 
+GEN_PARTS = ("text", "video", "album", "music")
+
+
 @app.post("/api/events/{slug}/generate")
 def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Header(None)):
     ev = get_event(slug)
     require_admin(ev, x_admin_token)
-    if ev["raw_purged_at"]:
+    parts = body.get("parts") or ["text", "video", "album"]
+    if not isinstance(parts, list):
+        err(400, "Parties à générer invalides.")
+    for p in parts:
+        if p not in GEN_PARTS:
+            err(400, f"Partie à générer inconnue : « {p} ».")
+    parts = [p for p in GEN_PARTS if p in parts]
+    vs = None
+    if body.get("video_settings") is not None:
+        if not isinstance(body["video_settings"], dict):
+            err(400, "Réglages vidéo invalides.")
+        vs = settings.normalize(body["video_settings"], ev["type"])
+        dur = vs["duration"]
+    else:  # ancien corps : durée seule
+        try:
+            dur = max(20, min(900, int(body["video_duration"]))) if body.get("video_duration") else None
+        except (TypeError, ValueError):
+            err(400, "Durée du film invalide.")
+    picked = None
+    if body.get("music") is not None:
+        m = body["music"]
+        if not isinstance(m, dict) or any(m.get(k) is not None and (type(m.get(k)) is not int)
+                                          for k in ("main_id", "final_id")):
+            err(400, "Choix de musique invalide.")
+        picked = {"main_id": m.get("main_id"), "final_id": m.get("final_id")}
+    if ev["raw_purged_at"] and parts != ["music"]:  # changer la musique n'a besoin que du film déjà monté
         err(409, "Les fichiers bruts ont été supprimés : la génération n'est plus possible.")
     if _active_job(ev["id"]):
         err(409, "Une génération est déjà en cours.")
-    parts = [p for p in (body.get("parts") or ["text", "video", "album"]) if p in ("text", "video", "album")]
-    dur = body.get("video_duration")
-    dur = max(20, min(900, int(dur))) if dur else None
     if not parts:
         err(400, "Rien à générer.")
     if db.one("SELECT COUNT(*) c FROM items WHERE event_id=? AND status='processing'", ev["id"])["c"]:
         err(409, "Des fichiers sont encore en cours de préparation, réessaie dans un instant.")
+    db.report(ev["id"])
+    if vs is not None:  # réglages gardés pour les générations suivantes et la relecture
+        db.update("reports", "event_id", ev["id"], video_settings=json.dumps(vs, ensure_ascii=False),
+                  video_duration=vs["duration"])
+    if picked is not None:
+        db.update("reports", "event_id", ev["id"], music=json.dumps(picked))
     extra = {"video_prompt": str(body["video_prompt"] or "")[:4000]} if "video_prompt" in body else {}
     jid = db.enqueue(ev["id"], "generate", parts=parts, video_duration=dur, ai=True, **extra)
     return {"job_id": jid}
@@ -485,7 +516,10 @@ def get_draft(slug: str, x_admin_token: str = Header(None)):
     alb = db.jl(rep["album"]) or {}
     active = _active_job(ev["id"])
     last = db.one("SELECT * FROM jobs WHERE event_id=? AND kind='generate' ORDER BY id DESC LIMIT 1", ev["id"])
+    picked = generate.stored_tracks(rep)
     return {
+        "video_settings": generate.video_settings(ev, rep),
+        "music": {k: music_mod.public(t) if t else None for k, t in picked.items()},
         "text_md": rep["text_md"], "selection": db.jl(rep["selection"], []),
         "items": [item_public(r, admin=True) for r in rows],
         "segments": segs, "video_ready": bool(rep["video_ready"]), "album_ready": bool(rep["album_ready"]),

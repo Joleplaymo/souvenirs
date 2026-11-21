@@ -1,4 +1,6 @@
 """Montage vidéo FFmpeg à partir du plan de montage (1920×1080, H.264 + AAC, lisible partout)."""
+import json
+import re
 import shutil
 import textwrap
 from functools import lru_cache
@@ -6,7 +8,6 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
-from .. import config
 from . import media
 
 W, H, FPS = 1920, 1080, 30
@@ -40,8 +41,8 @@ def title_card(text: str, out: Path):
     for y in range(H):  # léger dégradé chaud
         k = y / H
         d.line([(0, y), (W, y)], fill=(int(58 - 26 * k), int(38 - 16 * k), int(26 - 10 * k)))
-    lines = textwrap.wrap(text.strip(), 26) or [""]
-    size = 96 if len(lines) <= 2 else 76
+    lines = [ln for par in text.strip().split("\n") for ln in (textwrap.wrap(par, 26) or [""])] or [""]
+    size = 96 if len(lines) <= 2 else 76 if len(lines) <= 6 else 56
     f = _font("serif", size)
     total = len(lines) * int(size * 1.25)
     y = (H - total) // 2
@@ -177,53 +178,128 @@ def _render_segment(seg, item, tmp: Path, idx: int) -> Path:
     return out
 
 
-def pick_music(tone: str) -> Path | None:
-    d = config.MUSIC_DIR
-    if not d.exists():
+BASE = "video_base.mp4"  # film monté sans musique (carton de crédit compris), pour changer la musique seule
+META = "video_base.json"  # {"final_from", "body", "credits"} : ce qu'il faut pour refaire le mélange
+
+
+def credit_lines(credits) -> list[str]:
+    seen = []
+    for c in credits or []:
+        c = (c or "").strip()
+        if c and c not in seen:
+            seen.append(c)
+    return seen
+
+
+def credit_segment(credits: list[str]) -> dict:
+    """Carton final « Musique » + une ligne par morceau (le préfixe « Musique : » est porté par l'en-tête)."""
+    lines = [re.sub(r"^Musique\s*:\s*", "", c) for c in credits]
+    return {"type": "title", "item_id": 0, "text": "Musique\n" + "\n".join(lines), "duration": 3.0}
+
+
+def _concat(files: list[Path], lst: Path, out: Path):
+    """Concatène sans réencoder des fichiers rangés dans le même dossier que la liste."""
+    lst.write_text("".join(f"file '{f.name}'\n" for f in files))
+    media.sh(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)])
+
+
+def read_meta(base: Path) -> dict | None:
+    try:
+        return json.loads((base.parent / META).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return None
-    exact = d / f"{tone}.mp3"
-    if exact.exists():
-        return exact
-    any_mp3 = sorted(d.glob("*.mp3"))
-    return any_mp3[0] if any_mp3 else None
 
 
-def render(segs: list[dict], items: dict, tone: str, out: Path, on_progress=None) -> float:
-    """Assemble les segments puis ajoute la musique. Retourne la durée finale."""
+def render(segs: list[dict], items: dict, out: Path, tracks: dict, mix: int, on_progress=None) -> float:
+    """Assemble les segments (+ carton de crédit) dans video_base.mp4, puis y mélange la musique dans `out`.
+    tracks = {"main": Path | None, "final": Path | None, "credits": [str]}. Retourne la durée finale."""
     if not segs:
         raise RuntimeError("Le plan de montage est vide : il faut au moins une photo ou une vidéo.")
     tmp = out.parent / "tmp_video"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     try:
-        files = []
+        files, t, final_from = [], 0.0, None
         for i, seg in enumerate(segs):
             try:
-                files.append(_render_segment(seg, items.get(seg["item_id"]), tmp, i))
+                f = _render_segment(seg, items.get(seg["item_id"]), tmp, i)
             except Exception as e:  # un extrait illisible ne doit pas faire échouer tout le montage
                 print(f"[montage] segment {i} ignoré : {e}", flush=True)
+                f = None
+            if f is not None:
+                if seg["type"] == "title" and t > 0:
+                    final_from = t  # début du dernier carton de titre (hors ouverture) : entrée du morceau final
+                files.append(f)
+                t += media.probe(f)["duration"] or seg["duration"]
             if on_progress:
                 on_progress((i + 1) / (len(segs) + 1))
         if not files:
             raise RuntimeError("Aucun extrait n'a pu être monté.")
-        lst = tmp / "list.txt"
-        lst.write_text("".join(f"file '{f.name}'\n" for f in files))
+        credits = credit_lines(tracks.get("credits"))
+        if credits:
+            files.append(_render_segment(credit_segment(credits), None, tmp, len(segs)))
         joined = tmp / "joined.mp4"
-        media.sh(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(joined)])
-        total = media.probe(joined)["duration"] or 0
-        music = pick_music(tone)
-        final = tmp / "final.mp4"
-        if music:
-            fc = ("[0:a]asplit[voice][key];"
-                  f"[1:a]aresample=48000,volume=0.55,afade=t=in:d=1.5,afade=t=out:st={max(0, total - 3):.2f}:d=3[m];"
-                  "[m][key]sidechaincompress=threshold=0.02:ratio=10:attack=150:release=900[duck];"
-                  "[voice][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]")
-            media.sh(["ffmpeg", "-y", "-i", str(joined), "-stream_loop", "-1", "-i", str(music),
-                      "-filter_complex", fc, "-map", "0:v", "-map", "[a]", "-c:v", "copy",
-                      "-c:a", "aac", "-b:a", "192k", "-t", f"{total}", "-movflags", "+faststart", str(final)])
-        else:
-            media.sh(["ffmpeg", "-y", "-i", str(joined), "-c", "copy", "-movflags", "+faststart", str(final)])
-        final.replace(out)
-        return total
+        _concat(files, tmp / "list.txt", joined)
+        base = out.parent / BASE
+        joined.replace(base)
+        (out.parent / META).write_text(json.dumps({"final_from": final_from, "body": round(t, 3),
+                                                   "credits": credits}, ensure_ascii=False), encoding="utf-8")
+        mix_music(base, out, tracks, mix, final_from)
+        return media.probe(base)["duration"] or 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def recredit(base: Path, credits: list[str]):
+    """Remplace le carton de crédit de video_base.mp4 si les morceaux crédités ont changé."""
+    meta = read_meta(base)
+    credits = credit_lines(credits)
+    if meta is None or meta.get("credits", []) == credits:
+        return
+    tmp = base.parent / "tmp_credit"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    try:
+        body = tmp / "body.mp4"
+        if meta.get("credits"):  # on retire l'ancien carton (chaque segment commence sur une image clé)
+            media.sh(["ffmpeg", "-y", "-i", str(base), "-t", f"{meta['body']}", "-c", "copy", str(body)])
+        else:
+            shutil.copy2(base, body)
+        files = [body]
+        if credits:
+            files.append(_render_segment(credit_segment(credits), None, tmp, 0))
+        new = tmp / "base.mp4"
+        _concat(files, tmp / "list.txt", new)
+        new.replace(base)
+        meta["credits"] = credits
+        (base.parent / META).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def mix_music(base: Path, out: Path, tracks: dict, mix: int, final_from: float | None) -> None:
+    """Mélange la musique sous le son du film (compression latérale) ; sans morceau, copie le film tel quel.
+    Morceau final : fondu enchaîné de 2 s depuis le principal, à partir de `final_from`."""
+    total = media.probe(base)["duration"] or 0
+    tmp = out.with_name(out.stem + ".mix.mp4")
+    main, final = tracks.get("main"), tracks.get("final")
+    if not main:
+        media.sh(["ffmpeg", "-y", "-i", str(base), "-c", "copy", "-movflags", "+faststart", str(tmp)])
+        tmp.replace(out)
+        return
+    vol = 0.15 + 0.85 * max(0, min(100, int(mix))) / 100
+    fmt = "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS"
+    args = ["ffmpeg", "-y", "-i", str(base), "-stream_loop", "-1", "-i", str(main)]
+    if final and final_from is not None and 0 < final_from < total - 2:
+        args += ["-stream_loop", "-1", "-i", str(final)]
+        bed = (f"[1:a]{fmt},atrim=0:{final_from + 2:.3f}[m1];[2:a]{fmt}[m2];"
+               "[m1][m2]acrossfade=d=2[bed];")
+    else:
+        bed = f"[1:a]{fmt}[bed];"
+    fc = ("[0:a]asplit[voice][key];" + bed
+          + f"[bed]volume={vol:.3f},afade=t=in:d=1.5,afade=t=out:st={max(0, total - 3):.2f}:d=3[m];"
+          "[m][key]sidechaincompress=threshold=0.02:ratio=10:attack=150:release=900[duck];"
+          "[voice][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]")
+    media.sh([*args, "-filter_complex", fc, "-map", "0:v", "-map", "[a]", "-c:v", "copy",
+              "-c:a", "aac", "-b:a", "192k", "-t", f"{total}", "-movflags", "+faststart", str(tmp)])
+    tmp.replace(out)
