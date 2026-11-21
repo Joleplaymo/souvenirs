@@ -104,6 +104,7 @@ export default function Home() {
               </li>
             ))}
           </ul>
+          <p><a href="/musiques">Musiques</a> <span className="muted small">· ajouter tes propres morceaux</span></p>
           <button className="link" onClick={() => { tokens.setCode(null); setEvents(null); setCode(""); }}>Se déconnecter de cet appareil</button>
         </section>
       )}

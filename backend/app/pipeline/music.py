@@ -34,13 +34,22 @@ def all_tracks() -> list[dict]:
 
 def path(track: dict) -> Path | None:
     """Fichier audio du morceau, ou None s'il est absent."""
-    p = config.MUSIC_DIR / track["file"]
+    if track.get("origin") == "upload":
+        p = config.DATA_DIR / "music" / "uploads" / track["file"]
+    else:
+        p = config.MUSIC_DIR / track["file"]
     return p if p.is_file() else None
 
 
 def public(track: dict) -> dict:
     return {"id": track["id"], "title": track["title"], "artist": track["artist"],
             "credit": track["credit"], "url": f"/api/music/{track['id']}.mp3"}
+
+
+def detail(track: dict) -> dict:
+    """Vue complète pour l'écran Musiques : public() + genres, énergie, humeur, origine, licence, durée."""
+    return {**public(track), "genres": track["genres"], "energy": track["energy"], "mood": track["mood"],
+            "origin": track["origin"], "license": track["license"], "duration": track["duration"]}
 
 
 def sync_catalogue() -> int:

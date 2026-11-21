@@ -1,4 +1,5 @@
 """API HTTP + service de l'interface (PWA)."""
+import asyncio
 import hmac
 import json
 import logging
@@ -877,6 +878,100 @@ def manifest(slug: str):
         "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
                   {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
     }, media_type="application/manifest+json")
+
+
+# ------------------------------------------------------------------ musiques
+
+MAX_MUSIC_MB = 30
+
+
+@app.get("/api/music")
+def list_music(x_admin_code: str = Header(None)):
+    require_code(x_admin_code)
+    return [music_mod.detail(t) for t in music_mod.all_tracks()]
+
+
+@app.get("/api/music/{track_id}.mp3")
+def music_file(track_id: int):
+    t = music_mod.get(track_id)
+    p = music_mod.path(t) if t else None
+    if p is None:
+        err(404, "Morceau introuvable.")
+    return FileResponse(p, media_type="audio/mpeg")
+
+
+@app.post("/api/music", status_code=201)
+async def add_music(request: Request, title: str = "", artist: str = "", genres: str = "", energy: str = "",
+                    mood: str = "", license: str = "", x_admin_code: str = Header(None)):
+    """Le fichier MP3 est le corps brut de la requête ; les informations passent dans l'URL."""
+    require_code(x_admin_code)
+    title, artist, license = title.strip()[:200], artist.strip()[:200], license.strip()[:300]
+    gl = [g.strip() for g in genres.split(",") if g.strip()]
+    if not title:
+        err(400, "Indique le titre du morceau.")
+    if not license:
+        err(400, "Indique la licence du morceau : tu dois avoir le droit de l'utiliser dans une vidéo partagée.")
+    if not gl or any(g not in config.GENRES for g in gl):
+        err(400, "Choisis au moins un genre dans la liste.")
+    if not energy.isdigit() or not 1 <= int(energy) <= 5:
+        err(400, "L'énergie doit être un nombre de 1 à 5.")
+    if mood not in config.MOODS:
+        err(400, "Choisis une humeur dans la liste.")
+    limit = MAX_MUSIC_MB * 1024 * 1024
+    too_big = f"Fichier trop volumineux (maximum {MAX_MUSIC_MB} Mo)."
+    declared = request.headers.get("content-length") or "0"
+    if declared.isdigit() and int(declared) > limit:
+        err(413, too_big)
+    d = config.DATA_DIR / "music" / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f".tmp-{secrets.token_hex(8)}"
+    try:
+        got = 0
+        try:
+            with open(tmp, "wb") as f:
+                async for chunk in request.stream():
+                    got += len(chunk)
+                    if got > limit:
+                        err(413, too_big)
+                    f.write(chunk)
+        except ClientDisconnect:
+            err(400, "Envoi interrompu, réessaie.")
+        if got == 0:
+            err(400, "Aucun fichier reçu.")
+        try:
+            info = await asyncio.to_thread(media.probe, tmp)
+        except Exception:
+            info = {}
+        if not info.get("has_audio"):
+            err(400, "Ce fichier n'est pas un MP3 lisible.")
+        credit = f"Musique : « {title} »" + (f" — {artist}" if artist else "")
+        tid = db.insert("tracks", key=f"upload-{secrets.token_hex(8)}", title=title, artist=artist, license=license,
+                        source_url="", credit=credit, genres=",".join(gl), energy=int(energy), mood=mood,
+                        duration=info.get("duration"), file="", origin="upload", created_at=db.now())
+        try:
+            tmp.replace(d / f"{tid}.mp3")
+            db.update("tracks", "id", tid, file=f"{tid}.mp3")
+        except Exception:
+            db.run("DELETE FROM tracks WHERE id=?", tid)
+            raise
+    finally:
+        tmp.unlink(missing_ok=True)
+    return music_mod.detail(music_mod.get(tid))
+
+
+@app.delete("/api/music/{track_id}")
+def delete_music(track_id: int, x_admin_code: str = Header(None)):
+    require_code(x_admin_code)
+    t = music_mod.get(track_id)
+    if t is None:
+        err(404, "Morceau introuvable.")
+    if t["origin"] != "upload":
+        err(403, "Les morceaux de la bibliothèque ne peuvent pas être supprimés.")
+    p = music_mod.path(t)
+    db.run("DELETE FROM tracks WHERE id=?", track_id)
+    if p:
+        p.unlink(missing_ok=True)
+    return {"ok": True}
 
 
 @app.get("/{path:path}")
