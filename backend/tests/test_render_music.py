@@ -357,3 +357,30 @@ def test_generate_rejects_bad_body(body):
     r = client.post(f"/api/events/{slug}/generate", json=body, headers=adm)
     assert r.status_code == 400
     assert r.json()["detail"]
+
+
+def test_music_credits_on_published_and_versions(lib):
+    lib([entry("carefree", credit=CREDIT)])
+    ev = make_event()
+    adm = {"x-admin-token": ev["admin_token"]}
+    run_job(ev, parts=["video"])
+    vid = db.report(ev["id"])["current_version"]
+    assert client.get(f"/api/events/{ev['slug']}/versions/{vid}", headers=adm).json()["music_credits"] == [CREDIT]
+    assert client.post(f"/api/events/{ev['slug']}/publish", headers=adm).status_code == 200
+    pub = client.get(f"/api/events/{ev['slug']}/published").json()
+    assert pub["has_video"] and pub["music_credits"] == [CREDIT]
+    # publication d'avant la copie de video_base.json : crédits de la version publiée
+    (generate.out_dir(ev["id"], "published") / video.META).unlink()
+    assert client.get(f"/api/events/{ev['slug']}/published").json()["music_credits"] == [CREDIT]
+    client.post(f"/api/events/{ev['slug']}/versions/{vid}/share", json={"shared": True}, headers=adm)
+    shared = client.get(f"/api/events/{ev['slug']}/published/versions/{vid}").json()
+    assert shared["music_credits"] == [CREDIT]
+
+
+def test_music_credits_empty_without_credit(lib):
+    lib([entry("a")])
+    ev = make_event()
+    adm = {"x-admin-token": ev["admin_token"]}
+    run_job(ev, parts=["video"])
+    assert client.post(f"/api/events/{ev['slug']}/publish", headers=adm).status_code == 200
+    assert client.get(f"/api/events/{ev['slug']}/published").json()["music_credits"] == []

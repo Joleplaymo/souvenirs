@@ -21,6 +21,7 @@ from .pipeline import album as album_mod
 from .pipeline import generate, media, settings
 from .pipeline import music as music_mod
 from .pipeline import versions as versions_mod
+from .pipeline import video as video_mod
 
 log = logging.getLogger("souvenirs")
 app = FastAPI(title="Souvenirs", docs_url=None, redoc_url=None, openapi_url=None)
@@ -134,7 +135,8 @@ def item_public(it, me_id=None, admin=False):
 @app.get("/api/config")
 def get_config():
     return {"types": config.EVENT_TYPES, "tones": config.TONES, "endings": config.ENDINGS, "genres": config.GENRES,
-            "durations": config.DURATIONS, "defaults": config.TYPE_DEFAULTS, "max_upload_mb": config.MAX_UPLOAD_MB}
+            "durations": config.DURATIONS, "defaults": config.TYPE_DEFAULTS, "moods": config.MOOD_LABELS,
+            "max_upload_mb": config.MAX_UPLOAD_MB}
 
 
 def _settings(body: dict) -> dict:
@@ -676,6 +678,13 @@ def list_versions(slug: str, x_admin_token: str = Header(None)):
             "has_draft": bool((rep["text_md"] or "").strip())}
 
 
+def _music_credits(folder) -> list[str]:
+    """Lignes de crédit musique d'un film rendu (video_base.json à côté du film), [] si inconnues."""
+    meta = video_mod.read_meta(folder / video_mod.BASE) or {}
+    credits = meta.get("credits")
+    return [c for c in credits if isinstance(c, str) and c.strip()] if isinstance(credits, list) else []
+
+
 def _version(ev, vid):
     v = db.one("SELECT * FROM versions WHERE id=? AND event_id=?", vid, ev["id"])
     if v is None:
@@ -688,7 +697,8 @@ def read_version(slug: str, vid: int, x_admin_token: str = Header(None)):
     ev = get_event(slug)
     require_admin(ev, x_admin_token)
     v = _version(ev, vid)
-    return {**_version_public(v, db.report(ev["id"])), "text_md": v["text_md"], "video_prompt": v["video_prompt"] or ""}
+    return {**_version_public(v, db.report(ev["id"])), "text_md": v["text_md"], "video_prompt": v["video_prompt"] or "",
+            "music_credits": _music_credits(versions_mod.vdir(ev["id"], vid)) if v["has_video"] else []}
 
 
 @app.get("/api/events/{slug}/versions/{vid}/{name}")
@@ -827,9 +837,15 @@ def published(slug: str):
     for v in db.q("SELECT id, label, tone FROM versions WHERE event_id=? AND shared=1 AND id IS NOT ? ORDER BY id",
                   ev["id"], rep["published_from"]):
         options.append({"id": v["id"], "label": v["label"], "tone_label": _tone_label(v["tone"]), "main": False})
+    credits = []
+    if rep["pub_has_video"]:  # copie de video_base.json faite à la publication, sinon celle de la version publiée
+        pub = generate.out_dir(ev["id"], "published")
+        credits = _music_credits(pub) if (pub / video_mod.META).is_file() else (
+            _music_credits(versions_mod.vdir(ev["id"], rep["published_from"])) if rep["published_from"] else [])
     return {"published": True, "text_md": rep["pub_text_md"], "photos": db.jl(rep["pub_selection"], []),
             "has_video": bool(rep["pub_has_video"]), "has_album": bool(rep["pub_has_album"]),
-            "version": rep["pub_version"], "published_at": ev["published_at"], "versions": options}
+            "version": rep["pub_version"], "published_at": ev["published_at"], "versions": options,
+            "music_credits": credits}
 
 
 def _shared_version(slug, vid):
@@ -852,7 +868,8 @@ def published_version(slug: str, vid: int):
     d = versions_mod.vdir(ev["id"], vid)
     return {"id": v["id"], "label": v["label"], "tone_label": _tone_label(v["tone"]),
             "text_md": v["text_md"], "photos": [i for i in ids if i in ok and media.derived(ev["id"], i, "d").exists()],
-            "has_video": (d / "video.mp4").exists(), "has_album": (d / "album.pdf").exists()}
+            "has_video": (d / "video.mp4").exists(), "has_album": (d / "album.pdf").exists(),
+            "music_credits": _music_credits(d) if (d / "video.mp4").exists() else []}
 
 
 @app.get("/api/events/{slug}/published/versions/{vid}/{name}")

@@ -62,7 +62,16 @@ GENRES = {
     "piano": "Piano",
     "orchestral": "Orchestral",
 }
-MOODS = ("joyeux", "festif", "epique", "tendre", "calme", "melancolique", "triste")
+MOOD_LABELS = {
+    "joyeux": "Joyeux",
+    "festif": "Festif",
+    "epique": "Épique",
+    "tendre": "Tendre",
+    "calme": "Calme",
+    "melancolique": "Mélancolique",
+    "triste": "Triste",
+}
+MOODS = tuple(MOOD_LABELS)
 DURATIONS = (30, 60, 120, 180, 300)
 
 

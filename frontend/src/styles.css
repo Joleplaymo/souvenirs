@@ -214,6 +214,27 @@ details summary { cursor: pointer; padding: 10px 0; font-weight: 600; }
 .chip { border: 1.5px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 8px 14px; font: inherit; font-size: .92rem; cursor: pointer; min-height: 40px; }
 .chip.on { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 
+.chip:disabled { opacity: .5; cursor: default; }
+
+/* Champs à puces, curseurs, interrupteurs */
+.field { margin: 12px 0; min-width: 0; }
+.field-label { font-weight: 600; font-size: .92rem; }
+.field-label .muted { font-weight: 400; }
+.slider input[type="range"] { padding: 0; border: 0; background: none; min-height: 36px; accent-color: var(--accent); }
+.slider-ends { display: flex; justify-content: space-between; gap: 8px; font-weight: 400; }
+.switch { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.switch input[type="checkbox"] { width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; flex: none; accent-color: var(--accent); }
+
+/* Écran Générer : sections repliables, pré-écoute */
+.gen .sect { border-top: 1px solid var(--line); margin-top: 8px; }
+.gen .sect > summary h3 { display: inline; margin: 0; font-size: 1.1rem; }
+.gen .sect > summary { padding: 12px 0 4px; }
+.preview { background: var(--accent-soft); border-radius: 14px; padding: 12px 14px; margin: 16px 0; min-width: 0; }
+.preview h3 { margin: 0 0 8px; }
+.preview-track { margin-bottom: 10px; overflow-wrap: anywhere; }
+.change-music { margin-top: 8px; }
+.credits { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+
 /* Catalogue musical */
 .track { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .track-head { display: flex; flex-direction: column; margin-bottom: 4px; }

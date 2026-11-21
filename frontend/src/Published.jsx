@@ -2,6 +2,12 @@ import React, { useEffect, useState } from "react";
 import { api, fmtDates, mediaUrl } from "./api.js";
 import Markdown from "./Markdown.jsx";
 
+// Crédit des morceaux du film (licence CC BY : obligatoire), sous le lecteur.
+export function MusicCredits({ credits }) {
+  if (!credits || !credits.length) return null;
+  return <p className="credits muted small">{credits.map((c) => <span key={c}>{c}</span>)}</p>;
+}
+
 export default function Published({ slug, ev }) {
   const [pub, setPub] = useState(null);
   const [view, setView] = useState(null);
@@ -36,11 +42,11 @@ export default function Published({ slug, ev }) {
   const v = `?v=${pub.version}`;
   // contenu affiché : la version publiée, ou une autre version proposée au groupe
   const c = chosen && alt ? {
-    text_md: alt.text_md, has_video: alt.has_video, has_album: alt.has_album,
+    text_md: alt.text_md, has_video: alt.has_video, has_album: alt.has_album, credits: alt.music_credits || [],
     video: `${base}/published/versions/${alt.id}/video.mp4`, album: `${base}/published/versions/${alt.id}/album.pdf`,
     photos: alt.photos.map((id) => ({ id, thumb: mediaUrl(slug, id, "thumb"), full: mediaUrl(slug, id, "display") })),
   } : {
-    text_md: pub.text_md, has_video: pub.has_video, has_album: pub.has_album,
+    text_md: pub.text_md, has_video: pub.has_video, has_album: pub.has_album, credits: pub.music_credits || [],
     video: `${base}/out/published/video.mp4${v}`, album: `${base}/out/published/album.pdf${v}`,
     photos: pub.photos.map((id) => ({ id, thumb: `${base}/published/photos/${id}_t.jpg${v}`, full: `${base}/published/photos/${id}.jpg${v}` })),
   };
@@ -63,6 +69,7 @@ export default function Published({ slug, ev }) {
       {c.has_video && (
         <section className="film">
           <video key={c.video} controls playsInline preload="metadata" src={`${c.video}#t=1.2`} />
+          <MusicCredits credits={c.credits} />
         </section>
       )}
       <Markdown text={c.text_md} />

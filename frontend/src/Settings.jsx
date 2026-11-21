@@ -1,9 +1,11 @@
 // Réglages du souvenir modifiables après sa création (organisateur) : nom, dates, type, ton, fuseau horaire.
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api, fmtDates } from "./api.js";
+import Chips, { Field, ToneChips, typeTones } from "./Chips.jsx";
 
 const FIELDS = ["name", "start_date", "end_date", "type", "tone", "tz"];
-const pick = (ev) => Object.fromEntries(FIELDS.map((k) => [k, ev[k] || ""]));
+const pick = (ev) => ({ ...Object.fromEntries(FIELDS.map((k) => [k, ev[k] || ""])), tone: [...(ev.tones || [])] });
+const same = (form, ev, k) => (k === "tone" ? form.tone.join(",") === (ev.tones || []).join(",") : form[k] === (ev[k] || ""));
 
 function zones(current) {
   let list = [];
@@ -17,11 +19,14 @@ export default function Settings({ slug, ev, disabled, onSaved, onToast }) {
   const [form, setForm] = useState(pick(ev));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const toneTouched = useRef(false);
   useEffect(() => { api("/config").then(setCfg).catch(() => {}); }, []);
-  useEffect(() => { if (!open) setForm(pick(ev)); }, [ev, open]);
+  useEffect(() => { if (!open) { setForm(pick(ev)); toneTouched.current = false; } }, [ev, open]);
 
   const up = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value, ...(k === "start_date" && f.end_date < e.target.value ? { end_date: e.target.value } : {}) }));
-  const changed = FIELDS.filter((k) => form[k] !== (ev[k] || ""));
+  const setType = ([t]) => setForm((f) => ({ ...f, type: t, ...(toneTouched.current ? {} : { tone: typeTones(cfg, t) }) }));
+  const setTone = (v) => { toneTouched.current = true; setForm((f) => ({ ...f, tone: v })); };
+  const changed = FIELDS.filter((k) => !same(form, ev, k));
   const tzList = open ? zones(form.tz) : [];
 
   const save = async (e) => {
@@ -62,26 +67,25 @@ export default function Settings({ slug, ev, disabled, onSaved, onToast }) {
             <label>Du<input type="date" value={form.start_date} onChange={up("start_date")} required /></label>
             <label>Au<input type="date" value={form.end_date} min={form.start_date} onChange={up("end_date")} required /></label>
           </div>
-          <label>Type d'événement
-            <select value={form.type} onChange={up("type")}>{Object.entries(cfg.types).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-          </label>
-          <label>Ton du compte rendu
-            <select value={form.tone} onChange={up("tone")}>{Object.entries(cfg.tones).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-          </label>
+          <Field label="Type d'événement">
+            <Chips options={Object.entries(cfg.types)} value={[form.type]} max={1} onChange={setType} label="Type d'événement" />
+          </Field>
+          <ToneChips cfg={cfg} value={form.tone} onChange={setTone} />
           <label>Fuseau horaire de l'événement
             {tzList.length
               ? <select value={form.tz} onChange={up("tz")}>{tzList.map((z) => <option key={z} value={z}>{z.replaceAll("_", " ")}</option>)}</select>
               : <input value={form.tz} onChange={up("tz")} required placeholder="Europe/Paris" />}
           </label>
           <p className="muted small">
-            Le nouveau ton, le type et les dates s'appliquent à la prochaine génération : le récit, le film (et sa musique) et l'album
-            sont refaits avec ces réglages. Le fuseau sert à afficher et à raconter les heures des souvenirs.
+            Le ton s'applique au récit et au film. Le nouveau ton, le type et les dates s'appliquent à la prochaine génération :
+            le récit, le film (et sa musique) et l'album sont refaits avec ces réglages. Le fuseau sert à afficher et à raconter
+            les heures des souvenirs.
             {ev.published ? " Ce que voit le groupe ne change qu'après avoir publié à nouveau." : ""}
           </p>
           {error && <p className="error">{error}</p>}
           <div className="row">
             <button type="button" className="btn big" onClick={() => { setOpen(false); setError(""); }}>Annuler</button>
-            <button className="btn primary big" disabled={busy || !changed.length}>{busy ? "Enregistrement…" : "Enregistrer"}</button>
+            <button className="btn primary big" disabled={busy || !changed.length || !form.tone.length}>{busy ? "Enregistrement…" : "Enregistrer"}</button>
           </div>
         </form>
       )}

@@ -261,6 +261,10 @@ def publish(event_id: int):
         else:
             (pub / name).unlink(missing_ok=True)
             has[name] = 0
+    if has["video.mp4"] and (draft / video.META).exists():  # crédits musique du film publié
+        shutil.copy2(draft / video.META, pub / video.META)
+    else:
+        (pub / video.META).unlink(missing_ok=True)
     ev = db.one("SELECT published_at FROM events WHERE id=?", event_id)
     if not ev["published_at"]:
         db.update("events", "id", event_id, published_at=db.now())

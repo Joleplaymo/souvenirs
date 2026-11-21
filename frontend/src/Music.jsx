@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, tokens, fmtDur } from "./api.js";
+import Chips, { Field } from "./Chips.jsx";
 
-const MOODS = { joyeux: "Joyeux", festif: "Festif", epique: "Épique", tendre: "Tendre", calme: "Calme", melancolique: "Mélancolique", triste: "Triste" };
 const EMPTY = { title: "", artist: "", genres: [], energy: 3, mood: "joyeux", license: "" };
 const MAX_MB = 30;
 
@@ -26,7 +26,7 @@ export default function Music() {
   }, []);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const toggle = (g) => set("genres", form.genres.includes(g) ? form.genres.filter((x) => x !== g) : [...form.genres, g]);
+  const moodLabel = (m) => (cfg && cfg.moods && cfg.moods[m]) || m;
   const genreLabel = (g) => (cfg && cfg.genres[g]) || g;
 
   const submit = async (e) => {
@@ -71,20 +71,16 @@ export default function Music() {
               <label>Titre<input value={form.title} onChange={(e) => set("title", e.target.value)} required maxLength={200} /></label>
               <label>Artiste<input value={form.artist} onChange={(e) => set("artist", e.target.value)} maxLength={200} /></label>
             </div>
-            <div className="field">Genres
-              <div className="chips">
-                {Object.entries(cfg.genres).map(([k, v]) => (
-                  <button type="button" key={k} className={`chip${form.genres.includes(k) ? " on" : ""}`} aria-pressed={form.genres.includes(k)} onClick={() => toggle(k)}>{v}</button>
-                ))}
-              </div>
-            </div>
+            <Field label="Genres">
+              <Chips options={Object.entries(cfg.genres)} value={form.genres} onChange={(v) => set("genres", v)} label="Genres" />
+            </Field>
             <div className="grid2">
               <label>Énergie : {form.energy} / 5
                 <input type="range" min="1" max="5" step="1" value={form.energy} onChange={(e) => set("energy", Number(e.target.value))} />
               </label>
               <label>Humeur
                 <select value={form.mood} onChange={(e) => set("mood", e.target.value)}>
-                  {Object.entries(MOODS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  {Object.entries(cfg.moods || {}).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
               </label>
             </div>
@@ -108,7 +104,7 @@ export default function Music() {
                   <div className="chips">
                     {t.genres.map((g) => <span key={g} className="badge">{genreLabel(g)}</span>)}
                     <span className="badge">Énergie {t.energy}/5</span>
-                    <span className="badge">{MOODS[t.mood] || t.mood}</span>
+                    <span className="badge">{moodLabel(t.mood)}</span>
                     <span className="badge">{t.origin === "upload" ? "Ajouté par toi" : "Bibliothèque"}</span>
                   </div>
                   <audio controls preload="none" src={t.url} />

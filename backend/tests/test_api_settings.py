@@ -41,7 +41,8 @@ def test_create_event_accepts_legacy_type_and_tone():
 def test_config_exposes_defaults():
     c = client.get("/api/config").json()
     assert c["defaults"]["mariage"]["ending"] == "touchante"
-    assert {"endings", "genres", "durations", "types", "tones"} <= set(c)
+    assert {"endings", "genres", "durations", "types", "tones", "moods"} <= set(c)
+    assert c["moods"]["melancolique"] == "Mélancolique" and len(c["moods"]) == 7
 
 
 @pytest.mark.parametrize("tone", ["inconnu", [], None, ""])
