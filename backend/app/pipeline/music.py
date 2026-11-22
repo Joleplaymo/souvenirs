@@ -131,11 +131,13 @@ def sync_catalogue() -> int:
                     source_url=e.get("source_url", ""), credit=e.get("credit", ""),
                     genres=",".join(e.get("genres", [])), energy=e["energy"], mood=e["mood"],
                     bpm=e.get("bpm"), file=e["file"])
-        row = db.one("SELECT id, origin FROM tracks WHERE key=?", e["key"])
-        if row is None:
-            db.insert("tracks", key=e["key"], origin="library", created_at=db.now(), **vals)
-        elif row["origin"] == "library":
-            db.update("tracks", "id", row["id"], **vals)
+        # L'app et le worker synchronisent en même temps au démarrage : insertion qui ignore un morceau déjà
+        # présent, puis mise à jour par clé (jamais d'un morceau importé), plutôt que « lire puis insérer ».
+        cols = ["key", "origin", "created_at", *vals]
+        db.run(f"INSERT INTO tracks ({','.join(cols)}) VALUES ({','.join('?' * len(cols))}) "
+               "ON CONFLICT(key) DO NOTHING", e["key"], "library", db.now(), *vals.values())
+        db.run(f"UPDATE tracks SET {','.join(f'{k}=?' for k in vals)} WHERE key=? AND origin='library'",
+               *vals.values(), e["key"])
     # durée des morceaux présents ; un fichier illisible est marqué durée 0 (écarté du choix, resondé au démarrage)
     for t in db.q("SELECT id, file, origin FROM tracks WHERE origin='library' AND (duration IS NULL OR duration <= 0)"):
         p = path(dict(t))

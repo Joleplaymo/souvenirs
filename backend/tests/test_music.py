@@ -111,6 +111,21 @@ def test_sync_keeps_uploads(lib):
     assert db.one("SELECT * FROM tracks WHERE key='up1'")["origin"] == "upload"
 
 
+def test_sync_tolerates_concurrent_insert(lib, monkeypatch):
+    """L'app et le worker synchronisent le catalogue au même moment au démarrage : l'autre processus peut insérer
+    un morceau entre notre lecture et notre écriture. La synchronisation ne doit pas échouer pour autant."""
+    lib([JOYEUX])  # l'« autre processus » a déjà inséré le morceau
+    real_one = db.one
+
+    def stale_one(sql, *args):  # notre lecture date d'avant son insertion
+        return None if "FROM tracks WHERE key" in sql else real_one(sql, *args)
+
+    monkeypatch.setattr(db, "one", stale_one)
+    assert music.sync_catalogue() == 1
+    monkeypatch.setattr(db, "one", real_one)
+    assert db.one("SELECT COUNT(*) c FROM tracks WHERE key='joyeux-funk'")["c"] == 1
+
+
 def test_sync_updates_and_public(lib):
     lib([JOYEUX])
     lib([{**JOYEUX, "genres": ["pop", "funk"]}])
