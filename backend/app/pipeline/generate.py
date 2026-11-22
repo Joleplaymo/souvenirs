@@ -3,7 +3,7 @@ import json
 import shutil
 
 from .. import config, db
-from . import ai, album, media, timeline, transcribe, video
+from . import ai, album, media, music, settings, timeline, transcribe, video
 
 
 class Progress:
@@ -77,14 +77,116 @@ def _people(event_id):
         "WHERE i.event_id=? ORDER BY p.name", event_id)]
 
 
+NO_BASE = "Ce film date d'avant le choix des musiques : régénère le film une fois."
+STALE_BASE = "Le film n'est plus à jour : régénère-le avant de changer la musique."
+
+
+def remix_problem(event_id: int, rep) -> str | None:
+    """Pourquoi « Changer la musique » est impossible (message), ou None si le film monté peut être remixé."""
+    base = out_dir(event_id) / video.BASE
+    if not base.is_file() or video.read_meta(base) is None:
+        return NO_BASE
+    if not rep["video_ready"]:
+        return STALE_BASE
+    return None
+
+
+def video_settings(ev, rep) -> dict:
+    """Réglages vidéo du brouillon ; ceux d'avant les réglages (NULL) : valeurs par défaut du type."""
+    raw = db.jl(rep["video_settings"]) or {"duration": rep["video_duration"]}
+    return settings.normalize(raw if isinstance(raw, dict) else None, ev["type"])
+
+
+def _music_ids(raw) -> dict:
+    raw = raw if isinstance(raw, dict) else {}
+    return {k: raw.get(k) if isinstance(raw.get(k), int) and not isinstance(raw.get(k), bool) else None
+            for k in ("main_id", "final_id")}
+
+
+def store_music(event_id: int, main_id, final_id) -> None:
+    """Enregistre dans reports.music les identifiants (ou None) des morceaux choisis pour le prochain rendu."""
+    db.update("reports", "event_id", event_id, music=json.dumps({"main_id": main_id, "final_id": final_id}))
+
+
+def stored_tracks(rep) -> dict:
+    """Morceaux enregistrés pour le brouillon (encore présents), sans contrôle des réglages."""
+    ids = _music_ids(db.jl(rep["music"]))
+    found = {}
+    for k in ("main", "final"):
+        t = music.get(ids[f"{k}_id"]) if ids[f"{k}_id"] is not None else None
+        found[k] = t if music.usable(t) else None
+    return found
+
+
+def pick_tracks(ev, rep, st) -> dict:
+    """Morceaux du film : ceux choisis à la pré-écoute s'ils existent et restent permis, sinon music.choose.
+    Le choix est enregistré dans reports.music."""
+    tones = ai._tones(ev)
+    touchante = st["ending"] == "touchante"
+    got = stored_tracks(rep)
+    main = got["main"] if got["main"] and music.allowed(got["main"], tones, False, st["ending"]) else None
+    final = got["final"] if touchante and got["final"] and music.allowed(got["final"], tones, True, "touchante") else None
+    if final and main and final["id"] == main["id"]:
+        final = None
+    if main is None or (touchante and final is None):
+        c = music.choose(tones, st, exclude=[t["id"] for t in (main, final) if t])
+        main = main or c["main"]
+        if touchante and final is None and c["final"] and (main is None or c["final"]["id"] != main["id"]):
+            final = c["final"]
+    if main is None:  # pas de morceau principal : film sans musique du tout
+        final = None
+    store_music(ev["id"], main["id"] if main else None, final["id"] if final else None)
+    return {"main": main, "final": final}
+
+
+def _credits(*tracks) -> list[str]:
+    return [t["credit"] for t in tracks if t and (t["credit"] or "").strip()]
+
+
+def _tracks(chosen) -> dict:
+    """Fichiers et crédits pour video.render / mix_music ; main_credits sert si le morceau final ne passe pas."""
+    main, final = chosen["main"], chosen["final"]
+    return {"main": music.path(main) if main else None, "final": music.path(final) if final else None,
+            "credits": _credits(main, final), "main_credits": _credits(main)}
+
+
 def render_video(ev, rep, prog, lo, hi):
     items = {it["id"]: it for it in timeline.load_items(ev["id"])}
     segs = [s for s in db.jl(rep["montage"], []) if s["item_id"] == 0 or s["item_id"] in items]
     while segs and segs[-1]["type"] == "title":
         segs.pop()
+    st = video_settings(ev, rep)
+    chosen = pick_tracks(ev, rep, st)
     out = out_dir(ev["id"]) / "video.mp4"
-    video.render(segs, items, ev["tone"], out, lambda f: prog("montage", lo + (hi - lo) * f, "Montage de la vidéo"))
+    video.render(segs, items, out, _tracks(chosen), st["mix"],
+                 lambda f: prog("montage", lo + (hi - lo) * f, "Montage de la vidéo"))
+    meta = video.read_meta(out.parent / video.BASE) or {}
+    if chosen["final"] and not video.final_fits(meta.get("final_from"), meta.get("body")):
+        # pas de séquence finale assez longue : le morceau final n'a été ni joué ni crédité
+        store_music(ev["id"], chosen["main"]["id"] if chosen["main"] else None, None)
     db.update("reports", "event_id", ev["id"], video_ready=1, montage=json.dumps(segs, ensure_ascii=False))
+
+
+def remix(ev, prog):
+    """« Changer la musique » : refait seulement le mélange à partir de video_base.mp4 (ni IA ni montage)."""
+    d = out_dir(ev["id"])
+    base = d / video.BASE
+    rep = db.report(ev["id"])
+    problem = remix_problem(ev["id"], rep)
+    if problem:
+        raise RuntimeError(problem)
+    meta = video.read_meta(base)
+    prog("musique", 0.2, "Changement de la musique")
+    st = video_settings(ev, rep)
+    chosen = pick_tracks(ev, rep, st)
+    if chosen["final"] and not video.final_fits(meta.get("final_from"), meta.get("body")):
+        chosen = {**chosen, "final": None}  # pas de séquence finale assez longue : ni jouée ni créditée
+        store_music(ev["id"], chosen["main"]["id"] if chosen["main"] else None, None)
+    tracks = _tracks(chosen)
+    video.recredit(base, tracks["credits"])
+    prog("musique", 0.6, "Mélange de la musique")
+    video.mix_music(base, d / "video.mp4", tracks, st["mix"], meta.get("final_from"))
+    db.update("reports", "event_id", ev["id"], video_ready=1)
 
 
 def render_album(ev, rep, prog, at):
@@ -99,10 +201,12 @@ def render_album(ev, rep, prog, at):
 
 
 def generate(job):
-    """parts ⊂ {text, video, album} ; ai=False ne fait que refaire le rendu à partir des plans existants."""
+    """parts ⊂ {text, video, album, music} ; ai=False ne fait que refaire le rendu à partir des plans existants ;
+    music seul refait uniquement le mélange de la musique."""
     ev = db.one("SELECT * FROM events WHERE id=?", job["event_id"])
     params = db.jl(job["params"], {})
     parts = set(params.get("parts") or ["text", "video", "album"])
+    only_music = parts == {"music"}
     use_ai = params.get("ai", True)
     prog = Progress(job["id"])
     rep = db.report(ev["id"])
@@ -113,7 +217,7 @@ def generate(job):
         rep = db.report(ev["id"])
     target = int(params.get("video_duration") or rep["video_duration"] or 120)
 
-    if use_ai:
+    if use_ai and not only_music:
         from . import versions
 
         if versions.dirty(ev["id"]):  # corrections pas encore enregistrées : on les garde avant de tout refaire
@@ -132,8 +236,12 @@ def generate(job):
         by_id = {it["id"]: it for it in items}
         if "video" in parts:
             prog("montage", 0.6, "Choix des meilleurs moments")
-            plan = ai.plan_montage(ev, report_md, items, target, rep["video_prompt"] or "")
+            plan = ai.plan_montage(ev, report_md, items, target, rep["video_prompt"] or "", video_settings(ev, rep))
             segs = video.normalize(plan, by_id, target)
+            if not video_settings(ev, rep)["subtitles"]:  # sous-titres désactivés : seuls les cartons gardent du texte
+                for s in segs:
+                    if s["type"] in ("photo", "video"):
+                        s["text"] = ""
             db.update("reports", "event_id", ev["id"], montage=json.dumps(segs, ensure_ascii=False), video_ready=0)
         if "album" in parts:
             prog("album", 0.62 if "video" not in parts else 0.61, "Sélection des photos de l'album")
@@ -147,12 +255,14 @@ def generate(job):
             render_video(ev, rep, prog, 0.63, 0.92)
         else:
             db.update("reports", "event_id", ev["id"], video_ready=0)
+    elif "music" in parts:
+        remix(ev, prog)
     if "album" in parts:
         render_album(ev, rep, prog, 0.93)
     if use_ai:  # chaque génération devient une version, pour comparer les tons et revenir en arrière
         from . import versions
 
-        versions.snapshot(ev["id"], origin="generation")
+        versions.snapshot(ev["id"], origin="generation", suffix=" · musique changée" if only_music else "")
     prog("termine", 1.0, "Terminé")
 
 
@@ -180,6 +290,10 @@ def publish(event_id: int):
         else:
             (pub / name).unlink(missing_ok=True)
             has[name] = 0
+    if has["video.mp4"] and (draft / video.META).exists():  # crédits musique du film publié
+        shutil.copy2(draft / video.META, pub / video.META)
+    else:
+        (pub / video.META).unlink(missing_ok=True)
     ev = db.one("SELECT published_at FROM events WHERE id=?", event_id)
     if not ev["published_at"]:
         db.update("events", "id", event_id, published_at=db.now())

@@ -1,7 +1,17 @@
 Musiques de fond du montage vidéo.
 
-Les quatre morceaux fournis (detendu, sportif, humour, emotion) sont produits par synthèse
-avec tools/make_music.py : ils n'ont aucun ayant droit tiers et sont utilisables librement.
+Catalogue : music/catalogue.json
+- 4 morceaux produits par synthèse avec tools/make_music.py (detendu, sportif, humour, emotion) :
+  aucun ayant droit tiers, utilisables librement.
+- Une quarantaine de morceaux de Kevin MacLeod (incompetech.com), licence Creative Commons
+  CC BY 4.0. Les MP3 ne sont pas dans le dépôt : l'appli les télécharge au démarrage dans le
+  dossier de données (music/library, volume Docker), une seule fois. Hors Docker, on peut aussi
+  lancer : python tools/fetch_music.py [--dest DOSSIER]
 
-Le montage prend le fichier <ton>.mp3 correspondant au ton de l'événement. Pour utiliser ta
-propre musique, remplace le fichier du même nom par un MP3 dont tu as les droits.
+Crédit : la licence CC BY 4.0 impose de citer l'auteur. Quand un morceau de la bibliothèque est
+utilisé, le crédit « Musique : « titre » — Kevin MacLeod (incompetech.com), licence CC BY 4.0 »
+est ajouté automatiquement à la fin du film.
+
+Ta propre musique : importe tes MP3 depuis l'écran « Musiques » de l'appli (uniquement des
+fichiers dont tu as les droits). Ils sont rangés avec le même genre, la même énergie et la même
+humeur que les morceaux du catalogue.

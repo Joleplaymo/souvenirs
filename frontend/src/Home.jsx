@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, tokens, fmtDates } from "./api.js";
 import { ShareRow } from "./App.jsx";
+import Chips, { Field, ToneChips, typeTones } from "./Chips.jsx";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -8,12 +9,15 @@ export default function Home() {
   const [cfg, setCfg] = useState(null);
   const [code, setCode] = useState(tokens.code() || "");
   const [events, setEvents] = useState(null);
-  const [form, setForm] = useState({ name: "", start_date: today(), end_date: today(), type: "weekend", tone: "detendu" });
+  const [form, setForm] = useState({ name: "", start_date: today(), end_date: today(), type: "weekend", tone: [] });
+  const [toneTouched, setToneTouched] = useState(false);
   const [created, setCreated] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api("/config").then(setCfg).catch(() => {}); }, []);
+  useEffect(() => {
+    api("/config").then((c) => { setCfg(c); setForm((f) => (f.tone.length ? f : { ...f, tone: typeTones(c, f.type) })); }).catch(() => {});
+  }, []);
   const load = async (c = code) => {
     setError("");
     try {
@@ -36,6 +40,8 @@ export default function Home() {
     setBusy(false);
   };
   const up = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value, ...(k === "start_date" && f.end_date < e.target.value ? { end_date: e.target.value } : {}) }));
+  const setType = ([t]) => setForm((f) => ({ ...f, type: t, ...(toneTouched ? {} : { tone: typeTones(cfg, t) }) }));
+  const setTone = (v) => { setToneTouched(true); setForm((f) => ({ ...f, tone: v })); };
   const link = (slug) => `${location.origin}/e/${slug}`;
 
   return (
@@ -80,14 +86,13 @@ export default function Home() {
             <label>Du<input type="date" value={form.start_date} onChange={up("start_date")} required /></label>
             <label>Au<input type="date" value={form.end_date} min={form.start_date} onChange={up("end_date")} required /></label>
           </div>
-          <label>Type d'événement
-            <select value={form.type} onChange={up("type")}>{Object.entries(cfg.types).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-          </label>
-          <label>Ton du compte rendu
-            <select value={form.tone} onChange={up("tone")}>{Object.entries(cfg.tones).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-          </label>
+          <Field label="Type d'événement">
+            <Chips options={Object.entries(cfg.types)} value={[form.type]} max={1} onChange={setType} label="Type d'événement" />
+          </Field>
+          <ToneChips cfg={cfg} value={form.tone} onChange={setTone} />
+          <p className="muted small">Le ton s'applique au récit et au film. Tu affineras la musique et le format au moment de générer.</p>
           {error && <p className="error">{error}</p>}
-          <button className="btn primary big" disabled={busy}>{busy ? "Création…" : "Créer l'événement"}</button>
+          <button className="btn primary big" disabled={busy || !form.tone.length}>{busy ? "Création…" : "Créer l'événement"}</button>
         </form>
       )}
 
@@ -106,6 +111,10 @@ export default function Home() {
           </ul>
           <button className="link" onClick={() => { tokens.setCode(null); setEvents(null); setCode(""); }}>Se déconnecter de cet appareil</button>
         </section>
+      )}
+
+      {events && (
+        <p className="center"><a href="/musiques">🎵 Musiques</a> <span className="muted small">· écouter le catalogue, ajouter tes propres morceaux</span></p>
       )}
     </main>
   );

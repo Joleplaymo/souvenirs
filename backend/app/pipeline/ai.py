@@ -6,21 +6,45 @@ permettre de tester la chaîne complète ; le résultat est alors signalé comme
 import base64
 import io
 import json
+from pathlib import Path
 
 from PIL import Image
 
 from .. import config
+from . import settings as video_settings
 from . import timeline
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 TONE_GUIDE = {
-    "detendu": "Ton de souvenir détendu : chaleureux, complice, tutoiement du groupe (« on »), humour léger.",
-    "sportif": "Ton de bilan sportif : précis, factuel et enthousiaste ; mets en avant l'effort, les temps, "
-               "les distances, les sensations et les enseignements.",
-    "humour": "Ton humoristique : taquin et plein d'autodérision, sans jamais être blessant envers quelqu'un.",
-    "emotion": "Ton émouvant et nostalgique : sensible, attentif aux petits moments et aux liens entre les gens.",
+    "drole": "Drôle : mets en avant les fous rires, les maladresses et les répliques ; garde un timing "
+             "comique et un humour taquin, sans jamais blesser quelqu'un.",
+    "festif": "Festif : fais ressentir l'énergie du groupe, la danse et les célébrations ; style vivant et "
+              "enthousiaste.",
+    "epique": "Épique : donne de l'ampleur au récit, fais monter la tension et souligne les temps forts "
+              "comme des exploits.",
+    "tendre": "Tendre : attarde-toi sur les regards, les gestes et les liens entre les gens ; phrases "
+              "douces et sensibles.",
+    "chill": "Chill : récit posé et détendu, attentif à la lumière, aux paysages et aux moments calmes ; "
+             "pas de surenchère.",
+    "nostalgique": "Nostalgique : style contemplatif et chaleureux, comme un souvenir doux-amer qu'on "
+                   "revisite.",
+    "motivant": "Motivant : mets en avant l'effort, le dépassement et les encouragements ; phrases "
+                "franches et dynamiques.",
+    "decale": "Décalé : assume l'absurde, les situations insolites et les rapprochements inattendus.",
+    "cinema": "Cinéma : écriture soignée et imagée, comme la narration d'un film, avec un final travaillé.",
+    "documentaire": "Documentaire : chronologie fidèle, ton factuel et sobre, peu d'effets de style.",
 }
+PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+
+def tone_guide(tones: list[str]) -> str:
+    """Consigne de style du récit pour 1 ou 2 tons (le premier domine)."""
+    parts = [TONE_GUIDE[t] for t in tones]
+    if len(parts) > 1:
+        parts.append("Le premier ton domine, le second nuance.")
+    return "Ton du texte. " + " ".join(parts)
+
 
 SYSTEM = (
     "Tu es l'auteur des carnets de souvenirs d'un groupe d'amis. Tu écris en français, à partir de ce que le "
@@ -96,10 +120,18 @@ def _obj(props, required=None):
             "additionalProperties": False}
 
 
+def _tones(ev) -> list[str]:
+    try:
+        return video_settings.parse_tones(ev["tone"])
+    except ValueError:
+        return ["chill"]  # valeur corrompue en base : repli neutre plutôt qu'un plantage
+
+
 def _context(ev) -> str:
+    tones = _tones(ev)
     return (
         f"Événement : « {ev['name']} » ({config.EVENT_TYPES.get(ev['type'], ev['type'])}), "
-        f"du {ev['start_date']} au {ev['end_date']}.\n{TONE_GUIDE.get(ev['tone'], TONE_GUIDE['detendu'])}"
+        f"du {ev['start_date']} au {ev['end_date']}.\n{tone_guide(tones)}"
     )
 
 
@@ -227,11 +259,30 @@ MONTAGE_SCHEMA = _obj({"segments": {"type": "array", "items": _obj({
     "start": {"type": "number"}, "end": {"type": "number"}, "duration": {"type": "number"}})}})
 
 
-def plan_montage(ev, report_md, media, target: int, wishes: str = "") -> dict:
+def montage_prompt(ev, settings: dict, target: int) -> str:
+    """Remplit le modèle prompts/montage.md avec l'événement et les réglages vidéo."""
+    text = (PROMPT_DIR / "montage.md").read_text(encoding="utf-8")
+    event_type = config.LEGACY_TYPES.get(ev["type"], ev["type"])
+    values = {
+        "nom": ev["name"],
+        "type": config.EVENT_TYPES.get(event_type, config.EVENT_TYPES["autre"]),
+        "ton": video_settings.tones_label(_tones(ev)),
+        "fin": config.ENDINGS[settings["ending"]],
+        "duree": f"{target} secondes",
+        "sous_titres": "oui" if settings["subtitles"] else "non",
+    }
+    for key, value in values.items():
+        text = text.replace("{{" + key + "}}", value)
+    return text
+
+
+def plan_montage(ev, report_md, media, target: int, wishes: str = "", settings: dict | None = None) -> dict:
     if not enabled():
         return _local_montage(ev, media, target)
+    if settings is None:
+        settings = video_settings.normalize(None, ev["type"])
     prompt = (
-        _context(ev) + "\n\nCompte rendu de l'événement :\n\n" + report_md
+        montage_prompt(ev, settings, target) + "\n\nCompte rendu de l'événement :\n\n" + report_md
         + "\n\nVidéos et photos disponibles, avec les paroles horodatées (en secondes) et, pour mémoire, "
         "les dictées et conversations dont tu peux tirer des citations :\n\n" + timeline.render(ev, media)
         + f"\n\nÉtablis le plan de montage d'un film souvenir d'environ {target} secondes au total "

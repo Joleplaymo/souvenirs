@@ -1,6 +1,8 @@
 """API HTTP + service de l'interface (PWA)."""
+import asyncio
 import hmac
 import json
+import logging
 import mimetypes
 import re
 import secrets
@@ -16,11 +18,18 @@ from starlette.requests import ClientDisconnect
 
 from . import config, db
 from .pipeline import album as album_mod
-from .pipeline import generate, media
+from .pipeline import generate, media, settings
+from .pipeline import music as music_mod
 from .pipeline import versions as versions_mod
+from .pipeline import video as video_mod
 
+log = logging.getLogger("souvenirs")
 app = FastAPI(title="Souvenirs", docs_url=None, redoc_url=None, openapi_url=None)
 db.init()
+try:
+    music_mod.sync_catalogue()
+except Exception:
+    log.exception("synchronisation du catalogue musical impossible")
 
 EXT = {"audio/webm": "webm", "audio/mp4": "m4a", "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/wav": "wav",
        "audio/x-m4a": "m4a", "audio/aac": "aac", "video/mp4": "mp4", "video/quicktime": "mov",
@@ -76,6 +85,20 @@ def require_code(code):
         err(403, "Code administrateur incorrect.")
 
 
+def _tones(value, event_type: str | None = None) -> list[str]:
+    """Tons d'une valeur stockée ; jamais vide : une valeur corrompue retombe sur les tons par défaut du type."""
+    try:
+        return settings.parse_tones(value)
+    except ValueError as e:
+        fallback = settings.defaults(event_type or "autre")["tones"] or ["chill"]
+        log.warning("Ton invalide en base (%r) : %s. Repli sur %s.", value, e, fallback)
+        return fallback
+
+
+def _tone_label(value, event_type: str | None = None) -> str:
+    return " + ".join(config.TONES[t] for t in _tones(value, event_type))
+
+
 def event_public(ev, is_admin=False):
     n = db.one("SELECT COUNT(*) c FROM items WHERE event_id=?", ev["id"])["c"]
     today = datetime.now(ZoneInfo(ev["tz"])).date()
@@ -87,7 +110,7 @@ def event_public(ev, is_admin=False):
     return {
         "slug": ev["slug"], "name": ev["name"], "tz": ev["tz"], "start_date": ev["start_date"], "end_date": ev["end_date"],
         "type": ev["type"], "type_label": config.EVENT_TYPES.get(ev["type"], ev["type"]),
-        "tone": ev["tone"], "tone_label": config.TONES.get(ev["tone"], ev["tone"]),
+        "tone": ev["tone"], "tones": _tones(ev["tone"], ev["type"]), "tone_label": _tone_label(ev["tone"], ev["type"]),
         "count": n, "day": (today - start).days + 1, "days": (end - start).days + 1,
         "phase": "avant" if today < start else "apres" if today > end else "pendant",
         "published": bool(ev["published_at"]), "is_admin": is_admin, "is_demo": bool(ev["is_demo"]),
@@ -111,7 +134,9 @@ def item_public(it, me_id=None, admin=False):
 
 @app.get("/api/config")
 def get_config():
-    return {"types": config.EVENT_TYPES, "tones": config.TONES, "max_upload_mb": config.MAX_UPLOAD_MB}
+    return {"types": config.EVENT_TYPES, "tones": config.TONES, "endings": config.ENDINGS, "genres": config.GENRES,
+            "durations": config.DURATIONS, "defaults": config.TYPE_DEFAULTS, "moods": config.MOOD_LABELS,
+            "max_upload_mb": config.MAX_UPLOAD_MB}
 
 
 def _settings(body: dict) -> dict:
@@ -128,9 +153,15 @@ def _settings(body: dict) -> dict:
         err(400, "Fuseau horaire inconnu.")
     if not name or end < start:
         err(400, "Donne un nom, et une date de fin après la date de début.")
-    if body.get("type") not in config.EVENT_TYPES or body.get("tone") not in config.TONES:
-        err(400, "Type ou ton inconnu.")
-    return {"name": name, "start_date": str(start), "end_date": str(end), "type": body["type"], "tone": body["tone"], "tz": tz}
+    typ = config.LEGACY_TYPES.get(body.get("type"), body.get("type"))
+    if typ not in config.EVENT_TYPES:
+        err(400, "Type inconnu.")
+    try:
+        tones = settings.parse_tones(body.get("tone"))
+    except ValueError as e:
+        err(400, str(e))
+    return {"name": name, "start_date": str(start), "end_date": str(end), "type": typ,
+            "tone": settings.tones_csv(tones), "tz": tz}
 
 
 @app.post("/api/events")
@@ -412,24 +443,94 @@ def _active_job(event_id):
                   "ORDER BY id DESC LIMIT 1", event_id)
 
 
+GEN_PARTS = ("text", "video", "album", "music")
+
+
 @app.post("/api/events/{slug}/generate")
 def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Header(None)):
     ev = get_event(slug)
     require_admin(ev, x_admin_token)
-    if ev["raw_purged_at"]:
+    parts = body.get("parts") or ["text", "video", "album"]
+    if not isinstance(parts, list):
+        err(400, "Parties à générer invalides.")
+    for p in parts:
+        if p not in GEN_PARTS:
+            err(400, f"Partie à générer inconnue : « {p} ».")
+    parts = [p for p in GEN_PARTS if p in parts]
+    vs = None
+    if body.get("video_settings") is not None:
+        if not isinstance(body["video_settings"], dict):
+            err(400, "Réglages vidéo invalides.")
+        vs = settings.normalize(body["video_settings"], ev["type"])
+        dur = vs["duration"]
+    else:  # ancien corps : durée seule
+        try:
+            dur = max(20, min(900, int(body["video_duration"]))) if body.get("video_duration") else None
+        except (TypeError, ValueError):
+            err(400, "Durée du film invalide.")
+    picked = None
+    if body.get("music") is not None:
+        m = body["music"]
+        if not isinstance(m, dict) or any(m.get(k) is not None and (type(m.get(k)) is not int)
+                                          for k in ("main_id", "final_id")):
+            err(400, "Choix de musique invalide.")
+        picked = {"main_id": m.get("main_id"), "final_id": m.get("final_id")}
+    if ev["raw_purged_at"] and parts != ["music"]:  # changer la musique n'a besoin que du film déjà monté
         err(409, "Les fichiers bruts ont été supprimés : la génération n'est plus possible.")
     if _active_job(ev["id"]):
         err(409, "Une génération est déjà en cours.")
-    parts = [p for p in (body.get("parts") or ["text", "video", "album"]) if p in ("text", "video", "album")]
-    dur = body.get("video_duration")
-    dur = max(20, min(900, int(dur))) if dur else None
     if not parts:
         err(400, "Rien à générer.")
+    if parts == ["music"]:
+        problem = generate.remix_problem(ev["id"], db.report(ev["id"]))
+        if problem:
+            err(409, problem)
     if db.one("SELECT COUNT(*) c FROM items WHERE event_id=? AND status='processing'", ev["id"])["c"]:
         err(409, "Des fichiers sont encore en cours de préparation, réessaie dans un instant.")
+    db.report(ev["id"])
+    if vs is not None:  # réglages gardés pour les générations suivantes et la relecture
+        db.update("reports", "event_id", ev["id"], video_settings=json.dumps(vs, ensure_ascii=False),
+                  video_duration=vs["duration"])
+    if picked is not None:
+        generate.store_music(ev["id"], picked["main_id"], picked["final_id"])
     extra = {"video_prompt": str(body["video_prompt"] or "")[:4000]} if "video_prompt" in body else {}
     jid = db.enqueue(ev["id"], "generate", parts=parts, video_duration=dur, ai=True, **extra)
     return {"job_id": jid}
+
+
+NO_MUSIC_MSG = "Aucune musique ne correspond à ces réglages : le film sera sans musique."
+
+
+@app.post("/api/events/{slug}/music/pick")
+def pick_music(slug: str, body: dict = Body(default={}), x_admin_token: str = Header(None)):
+    """Pré-écoute : propose le morceau (et celui de la fin) pour ces réglages, sans rien enregistrer."""
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    if body.get("tones") is None:
+        tones = _tones(ev["tone"], ev["type"])
+    else:
+        if not isinstance(body["tones"], (list, str)) or (
+                isinstance(body["tones"], list) and any(not isinstance(t, str) for t in body["tones"])):
+            err(400, "Tons invalides.")
+        try:
+            tones = settings.parse_tones(body["tones"])
+        except ValueError as e:
+            err(400, str(e))
+    raw = body.get("video_settings")
+    if raw is not None and not isinstance(raw, dict):
+        err(400, "Réglages vidéo invalides.")
+    vs = settings.normalize(raw, ev["type"])
+    exclude = body.get("exclude") or []
+    if not isinstance(exclude, list) or any(type(i) is not int for i in exclude):
+        err(400, "Liste de morceaux à exclure invalide.")
+    if _active_job(ev["id"]):
+        err(409, "Une génération est déjà en cours.")
+    got = music_mod.choose(tones, vs, exclude=exclude)
+    main, final = got["main"], got["final"]
+    # Sans effet de bord : rien n'est enregistré ici. Les écrans envoient les morceaux entendus avec /generate,
+    # qui les mémorise dans reports.music (sinon les rendus suivants changeraient de musique à l'insu de l'organisateur).
+    return {"main": music_mod.public(main) if main else None, "final": music_mod.public(final) if final else None,
+            "message": "" if main else NO_MUSIC_MSG}
 
 
 @app.get("/api/events/{slug}/job")
@@ -456,10 +557,14 @@ def get_draft(slug: str, x_admin_token: str = Header(None)):
     alb = db.jl(rep["album"]) or {}
     active = _active_job(ev["id"])
     last = db.one("SELECT * FROM jobs WHERE event_id=? AND kind='generate' ORDER BY id DESC LIMIT 1", ev["id"])
+    picked = generate.stored_tracks(rep)
     return {
+        "video_settings": generate.video_settings(ev, rep),
+        "music": {k: music_mod.public(t) if t else None for k, t in picked.items()},
         "text_md": rep["text_md"], "selection": db.jl(rep["selection"], []),
         "items": [item_public(r, admin=True) for r in rows],
         "segments": segs, "video_ready": bool(rep["video_ready"]), "album_ready": bool(rep["album_ready"]),
+        "can_remix": generate.remix_problem(ev["id"], rep) is None,
         "album_pages": len(alb.get("pages", [])) + 2 if alb.get("pages") else 0,
         "video_duration": rep["video_duration"], "video_prompt": rep["video_prompt"] or "",
         "ai_mode": rep["ai_mode"], "updated_at": rep["updated_at"],
@@ -558,7 +663,7 @@ def set_item_time(slug: str, item_id: int, body: dict = Body(...), x_admin_token
 
 
 def _version_public(v, rep):
-    return {"id": v["id"], "label": v["label"], "tone": v["tone"], "tone_label": config.TONES.get(v["tone"], v["tone"]),
+    return {"id": v["id"], "label": v["label"], "tone": v["tone"], "tone_label": _tone_label(v["tone"]),
             "type_label": config.EVENT_TYPES.get(v["type"], v["type"]), "origin": v["origin"],
             "created_at": v["created_at"], "has_video": bool(v["has_video"]), "has_album": bool(v["has_album"]),
             "current": v["id"] == rep["current_version"], "published": v["id"] == rep["published_from"],
@@ -576,6 +681,13 @@ def list_versions(slug: str, x_admin_token: str = Header(None)):
             "has_draft": bool((rep["text_md"] or "").strip())}
 
 
+def _music_credits(folder) -> list[str]:
+    """Lignes de crédit musique d'un film rendu (video_base.json à côté du film), [] si inconnues."""
+    meta = video_mod.read_meta(folder / video_mod.BASE) or {}
+    credits = meta.get("credits")
+    return [c for c in credits if isinstance(c, str) and c.strip()] if isinstance(credits, list) else []
+
+
 def _version(ev, vid):
     v = db.one("SELECT * FROM versions WHERE id=? AND event_id=?", vid, ev["id"])
     if v is None:
@@ -588,7 +700,8 @@ def read_version(slug: str, vid: int, x_admin_token: str = Header(None)):
     ev = get_event(slug)
     require_admin(ev, x_admin_token)
     v = _version(ev, vid)
-    return {**_version_public(v, db.report(ev["id"])), "text_md": v["text_md"], "video_prompt": v["video_prompt"] or ""}
+    return {**_version_public(v, db.report(ev["id"])), "text_md": v["text_md"], "video_prompt": v["video_prompt"] or "",
+            "music_credits": _music_credits(versions_mod.vdir(ev["id"], vid)) if v["has_video"] else []}
 
 
 @app.get("/api/events/{slug}/versions/{vid}/{name}")
@@ -723,13 +836,19 @@ def published(slug: str):
     rep = db.report(ev["id"])
     main_v = db.one("SELECT label, tone FROM versions WHERE id=?", rep["published_from"]) if rep["published_from"] else None
     options = [{"id": 0, "label": main_v["label"] if main_v else "Version principale",
-                "tone_label": config.TONES.get(main_v["tone"] if main_v else ev["tone"], ""), "main": True}]
+                "tone_label": _tone_label(main_v["tone"] if main_v else ev["tone"]), "main": True}]
     for v in db.q("SELECT id, label, tone FROM versions WHERE event_id=? AND shared=1 AND id IS NOT ? ORDER BY id",
                   ev["id"], rep["published_from"]):
-        options.append({"id": v["id"], "label": v["label"], "tone_label": config.TONES.get(v["tone"], v["tone"]), "main": False})
+        options.append({"id": v["id"], "label": v["label"], "tone_label": _tone_label(v["tone"]), "main": False})
+    credits = []
+    if rep["pub_has_video"]:  # copie de video_base.json faite à la publication, sinon celle de la version publiée
+        pub = generate.out_dir(ev["id"], "published")
+        credits = _music_credits(pub) if (pub / video_mod.META).is_file() else (
+            _music_credits(versions_mod.vdir(ev["id"], rep["published_from"])) if rep["published_from"] else [])
     return {"published": True, "text_md": rep["pub_text_md"], "photos": db.jl(rep["pub_selection"], []),
             "has_video": bool(rep["pub_has_video"]), "has_album": bool(rep["pub_has_album"]),
-            "version": rep["pub_version"], "published_at": ev["published_at"], "versions": options}
+            "version": rep["pub_version"], "published_at": ev["published_at"], "versions": options,
+            "music_credits": credits}
 
 
 def _shared_version(slug, vid):
@@ -750,9 +869,10 @@ def published_version(slug: str, vid: int):
     ok = {r["id"] for r in db.q(f"SELECT id FROM items WHERE event_id=? AND kind='photo' AND status='ready' AND excluded=0 "
                                 f"AND id IN ({','.join('?' * len(ids)) or 'NULL'})", ev["id"], *ids)} if ids else set()
     d = versions_mod.vdir(ev["id"], vid)
-    return {"id": v["id"], "label": v["label"], "tone_label": config.TONES.get(v["tone"], v["tone"]),
+    return {"id": v["id"], "label": v["label"], "tone_label": _tone_label(v["tone"]),
             "text_md": v["text_md"], "photos": [i for i in ids if i in ok and media.derived(ev["id"], i, "d").exists()],
-            "has_video": (d / "video.mp4").exists(), "has_album": (d / "album.pdf").exists()}
+            "has_video": (d / "video.mp4").exists(), "has_album": (d / "album.pdf").exists(),
+            "music_credits": _music_credits(d) if (d / "video.mp4").exists() else []}
 
 
 @app.get("/api/events/{slug}/published/versions/{vid}/{name}")
@@ -849,6 +969,100 @@ def manifest(slug: str):
         "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
                   {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
     }, media_type="application/manifest+json")
+
+
+# ------------------------------------------------------------------ musiques
+
+MAX_MUSIC_MB = 30
+
+
+@app.get("/api/music")
+def list_music(x_admin_code: str = Header(None)):
+    require_code(x_admin_code)
+    return [music_mod.detail(t) for t in music_mod.all_tracks()]
+
+
+@app.get("/api/music/{track_id}.mp3")
+def music_file(track_id: int):
+    t = music_mod.get(track_id)
+    p = music_mod.path(t) if t else None
+    if p is None:
+        err(404, "Morceau introuvable.")
+    return FileResponse(p, media_type="audio/mpeg")
+
+
+@app.post("/api/music", status_code=201)
+async def add_music(request: Request, title: str = "", artist: str = "", genres: str = "", energy: str = "",
+                    mood: str = "", license: str = "", x_admin_code: str = Header(None)):
+    """Le fichier MP3 est le corps brut de la requête ; les informations passent dans l'URL."""
+    await asyncio.to_thread(require_code, x_admin_code)  # pause anti-essais hors de la boucle d'événements
+    title, artist, license = title.strip()[:200], artist.strip()[:200], license.strip()[:300]
+    gl = [g.strip() for g in genres.split(",") if g.strip()]
+    if not title:
+        err(400, "Indique le titre du morceau.")
+    if not license:
+        err(400, "Indique la licence du morceau : tu dois avoir le droit de l'utiliser dans une vidéo partagée.")
+    if not gl or any(g not in config.GENRES for g in gl):
+        err(400, "Choisis au moins un genre dans la liste.")
+    if not energy.isdecimal() or not 1 <= int(energy) <= 5:
+        err(400, "L'énergie doit être un nombre de 1 à 5.")
+    if mood not in config.MOODS:
+        err(400, "Choisis une humeur dans la liste.")
+    limit = MAX_MUSIC_MB * 1024 * 1024
+    too_big = f"Fichier trop volumineux (maximum {MAX_MUSIC_MB} Mo)."
+    declared = request.headers.get("content-length") or "0"
+    if declared.isdecimal() and int(declared) > limit:
+        err(413, too_big)
+    d = config.DATA_DIR / "music" / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f".tmp-{secrets.token_hex(8)}"
+    try:
+        got = 0
+        try:
+            with open(tmp, "wb") as f:
+                async for chunk in request.stream():
+                    got += len(chunk)
+                    if got > limit:
+                        err(413, too_big)
+                    f.write(chunk)
+        except ClientDisconnect:
+            err(400, "Envoi interrompu, réessaie.")
+        if got == 0:
+            err(400, "Aucun fichier reçu.")
+        try:
+            info = await asyncio.to_thread(media.probe, tmp)
+        except Exception:
+            info = {}
+        if not info.get("has_audio"):
+            err(400, "Ce fichier n'est pas un MP3 lisible.")
+        credit = f"Musique : « {title} »" + (f" — {artist}" if artist else "")
+        tid = db.insert("tracks", key=f"upload-{secrets.token_hex(8)}", title=title, artist=artist, license=license,
+                        source_url="", credit=credit, genres=",".join(gl), energy=int(energy), mood=mood,
+                        duration=info.get("duration"), file="", origin="upload", created_at=db.now())
+        try:
+            tmp.replace(d / f"{tid}.mp3")
+            db.update("tracks", "id", tid, file=f"{tid}.mp3")
+        except Exception:
+            db.run("DELETE FROM tracks WHERE id=?", tid)
+            raise
+    finally:
+        tmp.unlink(missing_ok=True)
+    return music_mod.detail(music_mod.get(tid))
+
+
+@app.delete("/api/music/{track_id}")
+def delete_music(track_id: int, x_admin_code: str = Header(None)):
+    require_code(x_admin_code)
+    t = music_mod.get(track_id)
+    if t is None:
+        err(404, "Morceau introuvable.")
+    if t["origin"] != "upload":
+        err(403, "Les morceaux de la bibliothèque ne peuvent pas être supprimés.")
+    p = music_mod.path(t)
+    db.run("DELETE FROM tracks WHERE id=?", track_id)
+    if p:
+        p.unlink(missing_ok=True)
+    return {"ok": True}
 
 
 @app.get("/{path:path}")

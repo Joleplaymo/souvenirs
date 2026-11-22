@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
 import Home from "./Home.jsx";
 import EventPage from "./EventPage.jsx";
+import Music from "./Music.jsx";
 import { tokens } from "./api.js";
 
 function parse() {
+  if (location.pathname === "/musiques") return { page: "music" };
   const m = location.pathname.match(/^\/e\/([\w-]+)(?:\/admin\/([\w-]+))?/);
   if (!m) return { page: "home" };
   if (m[2]) {
@@ -21,6 +23,7 @@ export default function App() {
     window.addEventListener("popstate", f);
     return () => window.removeEventListener("popstate", f);
   }, []);
+  if (route.page === "music") return <Music />;
   return route.page === "event" ? <EventPage key={route.slug} slug={route.slug} /> : <Home />;
 }
 
