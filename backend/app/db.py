@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   status TEXT DEFAULT 'queued', step TEXT DEFAULT '', progress REAL DEFAULT 0, message TEXT DEFAULT '',
   created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS presets (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, data TEXT NOT NULL, created_at TEXT NOT NULL
+);
 """
 
 

@@ -256,7 +256,47 @@ def _local_album(ev, photos) -> dict:
 MONTAGE_SCHEMA = _obj({"segments": {"type": "array", "items": _obj({
     "type": {"type": "string", "enum": ["title", "photo", "video"]},
     "item_id": {"type": "integer"}, "text": {"type": "string"},
-    "start": {"type": "number"}, "end": {"type": "number"}, "duration": {"type": "number"}})}})
+    "start": {"type": "number"}, "end": {"type": "number"}, "duration": {"type": "number"},
+    "effect": {"type": "string", "enum": ["none", "slowmo", "speedup", "freeze", "punch"]}})}})
+
+
+RHYTHM_RULES = {
+    "pose": "plans de 3 à 5 s, transitions fondues",
+    "dynamique": "plans de 1,5 à 3 s, coupes sur les temps de la musique",
+    "nerveux": "plans de 0,5 à 1,5 s, coupes franches, quelques plans plus longs (jusqu'à 3 s) pour respirer",
+}
+EFFECT_RULES = {
+    "slowmo": "`slowmo` (ralenti, sur un temps fort)",
+    "speedup": "`speedup` (accéléré, pour passer un moment de transition)",
+    "freeze": "`freeze` (arrêt sur image, sur un instant marquant)",
+    "humor": "`punch` (zoom comique, réservé aux moments drôles)",
+}
+
+
+def _effects_rule(effects: dict) -> str:
+    enabled = [EFFECT_RULES[k] for k in EFFECT_RULES if effects.get(k)]
+    if not enabled:
+        return "aucun effet : le champ `effect` vaut toujours `none`."
+    return ("valeurs autorisées : `none` (par défaut), " + ", ".join(enabled)
+            + ". N'utilise aucune autre valeur que celles-ci, et seulement quand les images s'y prêtent ;"
+            " en cas de doute, `none`.")
+
+
+def _titles_rule(style: str) -> str:
+    if style == "aucun":
+        return "n'ajoute aucun carton : ne produis aucun segment `title`."
+    return (f"style {config.TITLE_STYLES[style]} ; garde des cartons courts, qui reprennent "
+            "l'ambiance de ce style.")
+
+
+def _framing_rule(framing: str) -> str:
+    base = ("l'image entière est affichée sur un fond flou, sans recadrage : garde les visages entiers et "
+            "ne déforme jamais les images.")
+    if framing == "9:16":
+        return "privilégie les médias en portrait et les plans serrés ; " + base
+    if framing == "1:1":
+        return "privilégie les plans centrés ; " + base
+    return "privilégie les médias en paysage ; " + base
 
 
 def montage_prompt(ev, settings: dict, target: int) -> str:
@@ -264,40 +304,58 @@ def montage_prompt(ev, settings: dict, target: int) -> str:
     text = (PROMPT_DIR / "montage.md").read_text(encoding="utf-8")
     event_type = config.LEGACY_TYPES.get(ev["type"], ev["type"])
     values = {
-        "nom": ev["name"],
         "type": config.EVENT_TYPES.get(event_type, config.EVENT_TYPES["autre"]),
         "ton": video_settings.tones_label(_tones(ev)),
         "fin": config.ENDINGS[settings["ending"]],
         "duree": f"{target} secondes",
         "sous_titres": "oui" if settings["subtitles"] else "non",
+        "rythme_nom": config.RHYTHMS[settings["rhythm"]],
+        "rythme": RHYTHM_RULES[settings["rhythm"]],
+        "effets": _effects_rule(settings["effects"]),
+        "style_titres": _titles_rule(settings["title_style"]),
+        "cadrage_nom": config.FRAMINGS[settings["framing"]],
+        "cadrage": _framing_rule(settings["framing"]),
+        # valeur saisie par l'utilisateur : remplacée en dernier, pour qu'un « {{x}} » tapé dans le nom
+        # ne soit pas substitué
+        "nom": ev["name"],
     }
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
     return text
 
 
+def _segments_prompt(target: int) -> str:
+    """Description des segments du plan, à la suite du modèle de prompt (durées selon le rythme)."""
+    return (
+        f"\n\nÉtablis le plan de montage d'un film souvenir d'environ {target} secondes au total "
+        "(tolérance ±10 %). Le plan est une suite de segments :\n"
+        "- `title` : carton de titre de séquence, court (ex. « Samedi matin — départ »), dans `text` ; "
+        "`duration` 1,5 à 3 s ; `item_id` = 0. Commence par un carton portant le nom de l'événement.\n"
+        "- `video` : extrait d'une vidéo (`item_id`), de `start` à `end` en secondes dans la vidéo source, "
+        "d'une durée selon le rythme indiqué plus haut ; coupe sur des phrases entières en t'aidant des "
+        "horodatages ; `text` = sous-titre : la phrase marquante réellement prononcée dans l'extrait, "
+        "sinon chaîne vide.\n"
+        "- `photo` : photo (`item_id`) affichée pendant `duration`, selon le rythme indiqué plus haut ; "
+        "`text` = courte citation tirée d'une dictée ou d'une conversation du même moment (entre « », "
+        "suivie de « — Prénom » si l'auteur est certain), ou légende très courte, ou chaîne vide.\n"
+        "Chaque segment porte un champ `effect` : l'une des valeurs autorisées listées plus haut dans la "
+        "consigne sur les effets, `none` par défaut.\n"
+        "Suis la chronologie, garde les meilleurs moments (images bien notées, rires, paroles fortes), "
+        "varie photos et vidéos, et termine sur une image forte. Pour un segment, les champs qui ne "
+        "s'appliquent pas valent 0 ou une chaîne vide. Les sous-titres font 90 caractères au plus."
+    )
+
+
 def plan_montage(ev, report_md, media, target: int, wishes: str = "", settings: dict | None = None) -> dict:
     if not enabled():
-        return _local_montage(ev, media, target)
+        return _local_montage(ev, media, target, settings)
     if settings is None:
         settings = video_settings.normalize(None, ev["type"])
     prompt = (
         montage_prompt(ev, settings, target) + "\n\nCompte rendu de l'événement :\n\n" + report_md
         + "\n\nVidéos et photos disponibles, avec les paroles horodatées (en secondes) et, pour mémoire, "
         "les dictées et conversations dont tu peux tirer des citations :\n\n" + timeline.render(ev, media)
-        + f"\n\nÉtablis le plan de montage d'un film souvenir d'environ {target} secondes au total "
-        "(tolérance ±10 %). Le plan est une suite de segments :\n"
-        "- `title` : carton de titre de séquence, court (ex. « Samedi matin — départ »), dans `text` ; "
-        "`duration` 2 à 3 s ; `item_id` = 0. Commence par un carton portant le nom de l'événement.\n"
-        "- `video` : extrait d'une vidéo (`item_id`), de `start` à `end` en secondes dans la vidéo source, "
-        "3 à 12 s en général ; coupe sur des phrases entières en t'aidant des horodatages ; `text` = "
-        "sous-titre : la phrase marquante réellement prononcée dans l'extrait, sinon chaîne vide.\n"
-        "- `photo` : photo (`item_id`) affichée pendant `duration` (2,5 à 4 s) ; `text` = courte citation "
-        "tirée d'une dictée ou d'une conversation du même moment (entre « », suivie de « — Prénom » si "
-        "l'auteur est certain), ou légende très courte, ou chaîne vide.\n"
-        "Suis la chronologie, garde les meilleurs moments (images bien notées, rires, paroles fortes), "
-        "varie photos et vidéos, et termine sur une image forte. Pour un segment, les champs qui ne "
-        "s'appliquent pas valent 0 ou une chaîne vide. Les sous-titres font 90 caractères au plus."
+        + _segments_prompt(target)
     )
     if wishes.strip():
         prompt += (
@@ -310,21 +368,40 @@ def plan_montage(ev, report_md, media, target: int, wishes: str = "", settings: 
     return _call([{"type": "text", "text": prompt}], MONTAGE_SCHEMA, effort="medium", max_tokens=32000)
 
 
-def _local_montage(ev, media, target: int) -> dict:
-    segs = [{"type": "title", "item_id": 0, "text": ev["name"], "start": 0, "end": 0, "duration": 3}]
+LOCAL_SHOT = {"pose": 4, "dynamique": 2.5, "nerveux": 1}
+
+
+def _local_montage(ev, media, target: int, settings: dict | None = None) -> dict:
+    shot = LOCAL_SHOT[settings["rhythm"]] if settings else None
+    fx = settings["effects"] if settings else {}
+    cycle = [k for k in ("slowmo", "speedup", "freeze") if fx.get(k)]
+    segs = [{"type": "title", "item_id": 0, "text": ev["name"], "start": 0, "end": 0, "duration": 3,
+             "effect": "none"}]
     current = None
+    n_video = n_visual = 0
     visual = [m for m in media if m["kind"] in ("photo", "video")]
     for it in visual:
         d = timeline.local_dt(it["captured_at"], ev["tz"])
         key = f"{timeline.fr_day(d).capitalize()} — {timeline.day_part(d)}"
         if key != current:
-            segs.append({"type": "title", "item_id": 0, "text": key, "start": 0, "end": 0, "duration": 2.5})
+            segs.append({"type": "title", "item_id": 0, "text": key, "start": 0, "end": 0, "duration": 2.5,
+                         "effect": "none"})
             current = key
+        n_visual += 1
+        effect = "none"
         if it["kind"] == "photo":
-            segs.append({"type": "photo", "item_id": it["id"], "text": "", "start": 0, "end": 0, "duration": 3.5})
+            seg = {"type": "photo", "item_id": it["id"], "text": "", "start": 0, "end": 0,
+                   "duration": shot or 3.5}
         else:
             tr = json.loads(it["transcript"] or "[]")
-            end = min(it["duration"] or 6, 8)
-            segs.append({"type": "video", "item_id": it["id"], "text": tr[0]["t"][:90] if tr else "",
-                         "start": 0, "end": end, "duration": end})
+            end = min(it["duration"] or 6, 8 if shot is None else max(shot * 2, 3))
+            seg = {"type": "video", "item_id": it["id"], "text": tr[0]["t"][:90] if tr else "",
+                   "start": 0, "end": end, "duration": end}
+            if cycle and n_video % 2 == 1:
+                effect = cycle[(n_video // 2) % len(cycle)]
+            n_video += 1
+        if effect == "none" and fx.get("humor") and n_visual % 4 == 0:
+            effect = "punch"
+        seg["effect"] = effect
+        segs.append(seg)
     return {"segments": segs}

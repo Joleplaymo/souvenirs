@@ -135,6 +135,8 @@ def item_public(it, me_id=None, admin=False):
 @app.get("/api/config")
 def get_config():
     return {"types": config.EVENT_TYPES, "tones": config.TONES, "endings": config.ENDINGS, "genres": config.GENRES,
+            "rhythms": config.RHYTHMS, "effects": config.EFFECTS, "title_styles": config.TITLE_STYLES,
+            "framings": config.FRAMINGS, "evolutions": config.EVOLUTIONS,
             "durations": config.DURATIONS, "defaults": config.TYPE_DEFAULTS, "moods": config.MOOD_LABELS,
             "max_upload_mb": config.MAX_UPLOAD_MB}
 
@@ -355,9 +357,9 @@ def _remove_from_draft(event_id: int, item_id: int) -> set:
     if item_id in sel:
         db.update("reports", "event_id", event_id, selection=json.dumps([i for i in sel if i != item_id]))
     segs = db.jl(rep["montage"], [])
-    if any(s["item_id"] == item_id for s in segs):
-        db.update("reports", "event_id", event_id,
-                  montage=json.dumps([s for s in segs if s["item_id"] != item_id], ensure_ascii=False))
+    if any(s["item_id"] == item_id for s in segs):  # marques de séquence (style « aucun ») gardées
+        db.update("reports", "event_id", event_id, montage=json.dumps(
+            video_mod.keep_segments(segs, lambda s: s["item_id"] != item_id), ensure_ascii=False))
         stale.add("video")
     return stale
 
@@ -446,6 +448,32 @@ def _active_job(event_id):
 GEN_PARTS = ("text", "video", "album", "music")
 
 
+def _music_choice(m) -> dict:
+    """Morceaux entendus à la pré-écoute → {rôle: id}. Format {"roles": {rôle: id}} ;
+    l'ancien {"main_id", "final_id"} est encore accepté."""
+    if not isinstance(m, dict):
+        err(400, "Choix de musique invalide.")
+    if "roles" in m:
+        roles = m["roles"]
+        if not isinstance(roles, dict) or any(r not in music_mod.ROLES or (i is not None and type(i) is not int)
+                                              for r, i in roles.items()):
+            err(400, "Choix de musique invalide.")
+        return {r: i for r, i in roles.items() if i is not None}
+    if any(m.get(k) is not None and type(m.get(k)) is not int for k in ("main_id", "final_id")):
+        err(400, "Choix de musique invalide.")
+    return {r: m[f"{r}_id"] for r in ("main", "final") if m.get(f"{r}_id") is not None}
+
+
+def _music_public(chosen: list[dict]) -> dict:
+    """Morceaux par rôle pour les écrans : {"tracks": [{"role", "track"}], "main", "final"}.
+    main (morceau qui porte le film) et final restent pour les écrans d'avant les rôles."""
+    lead = generate.lead(chosen)
+    final = next((c["track"] for c in chosen if c["role"] == "final"), None)
+    return {"tracks": [{"role": c["role"], "track": music_mod.public(c["track"])} for c in chosen],
+            "main": music_mod.public(lead) if lead else None,
+            "final": music_mod.public(final) if final else None}
+
+
 @app.post("/api/events/{slug}/generate")
 def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Header(None)):
     ev = get_event(slug)
@@ -468,13 +496,7 @@ def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Heade
             dur = max(20, min(900, int(body["video_duration"]))) if body.get("video_duration") else None
         except (TypeError, ValueError):
             err(400, "Durée du film invalide.")
-    picked = None
-    if body.get("music") is not None:
-        m = body["music"]
-        if not isinstance(m, dict) or any(m.get(k) is not None and (type(m.get(k)) is not int)
-                                          for k in ("main_id", "final_id")):
-            err(400, "Choix de musique invalide.")
-        picked = {"main_id": m.get("main_id"), "final_id": m.get("final_id")}
+    picked = _music_choice(body["music"]) if body.get("music") is not None else None
     if ev["raw_purged_at"] and parts != ["music"]:  # changer la musique n'a besoin que du film déjà monté
         err(409, "Les fichiers bruts ont été supprimés : la génération n'est plus possible.")
     if _active_job(ev["id"]):
@@ -492,10 +514,58 @@ def start_generate(slug: str, body: dict = Body(...), x_admin_token: str = Heade
         db.update("reports", "event_id", ev["id"], video_settings=json.dumps(vs, ensure_ascii=False),
                   video_duration=vs["duration"])
     if picked is not None:
-        generate.store_music(ev["id"], picked["main_id"], picked["final_id"])
+        generate.store_music(ev["id"], picked)
     extra = {"video_prompt": str(body["video_prompt"] or "")[:4000]} if "video_prompt" in body else {}
     jid = db.enqueue(ev["id"], "generate", parts=parts, video_duration=dur, ai=True, **extra)
     return {"job_id": jid}
+
+
+# ------------------------------------------------------------------ préréglages
+# Communs à tous les événements (un seul organisateur par installation). Liste triée par nom.
+
+def _preset_public(r):
+    d = db.jl(r["data"], {})
+    return {"id": r["id"], "name": r["name"], "tones": d.get("tones", []),
+            "video_settings": d.get("video_settings", {}), "created_at": r["created_at"]}
+
+
+@app.get("/api/events/{slug}/presets")
+def list_presets(slug: str, x_admin_token: str = Header(None)):
+    require_admin(get_event(slug), x_admin_token)
+    return [_preset_public(r) for r in db.q("SELECT * FROM presets ORDER BY name COLLATE NOCASE, id")]
+
+
+@app.post("/api/events/{slug}/presets")
+def save_preset(slug: str, body: dict = Body(...), x_admin_token: str = Header(None)):
+    """Enregistre les tons et réglages vidéo sous un nom ; un nom déjà pris est remplacé."""
+    ev = get_event(slug)
+    require_admin(ev, x_admin_token)
+    name = body.get("name")
+    name = name.strip() if isinstance(name, str) else ""
+    if not 1 <= len(name) <= 60:
+        err(400, "Donne un nom de 1 à 60 caractères au préréglage.")
+    t = body.get("tones")
+    if not isinstance(t, (list, str)) or (isinstance(t, list) and any(not isinstance(x, str) for x in t)):
+        err(400, "Tons invalides.")
+    try:
+        tones = settings.parse_tones(t)
+    except ValueError as e:
+        err(400, str(e))
+    raw = body.get("video_settings")
+    if raw is not None and not isinstance(raw, dict):
+        err(400, "Réglages vidéo invalides.")
+    data = json.dumps({"tones": tones, "video_settings": settings.normalize(raw, ev["type"])}, ensure_ascii=False)
+    db.run("INSERT INTO presets (name, data, created_at) VALUES (?,?,?) "
+           "ON CONFLICT(name) DO UPDATE SET data=excluded.data, created_at=excluded.created_at",
+           name, data, db.now())
+    return _preset_public(db.one("SELECT * FROM presets WHERE name=?", name))
+
+
+@app.delete("/api/events/{slug}/presets/{preset_id}")
+def delete_preset(slug: str, preset_id: int, x_admin_token: str = Header(None)):
+    require_admin(get_event(slug), x_admin_token)
+    db.run("DELETE FROM presets WHERE id=?", preset_id)
+    return {"ok": True}
 
 
 NO_MUSIC_MSG = "Aucune musique ne correspond à ces réglages : le film sera sans musique."
@@ -521,16 +591,18 @@ def pick_music(slug: str, body: dict = Body(default={}), x_admin_token: str = He
         err(400, "Réglages vidéo invalides.")
     vs = settings.normalize(raw, ev["type"])
     exclude = body.get("exclude") or []
-    if not isinstance(exclude, list) or any(type(i) is not int for i in exclude):
+    if isinstance(exclude, list):  # ancien format : liste d'ids, pour le morceau principal
+        exclude = {"main": exclude}
+    if not isinstance(exclude, dict) or any(
+            r not in music_mod.ROLES or not isinstance(ids, list) or any(type(i) is not int for i in ids)
+            for r, ids in exclude.items()):
         err(400, "Liste de morceaux à exclure invalide.")
     if _active_job(ev["id"]):
         err(409, "Une génération est déjà en cours.")
-    got = music_mod.choose(tones, vs, exclude=exclude)
-    main, final = got["main"], got["final"]
+    got = music_mod.plan_tracks(tones, vs, exclude=exclude)
     # Sans effet de bord : rien n'est enregistré ici. Les écrans envoient les morceaux entendus avec /generate,
     # qui les mémorise dans reports.music (sinon les rendus suivants changeraient de musique à l'insu de l'organisateur).
-    return {"main": music_mod.public(main) if main else None, "final": music_mod.public(final) if final else None,
-            "message": "" if main else NO_MUSIC_MSG}
+    return {**_music_public(got), "message": "" if got else NO_MUSIC_MSG}
 
 
 @app.get("/api/events/{slug}/job")
@@ -560,7 +632,7 @@ def get_draft(slug: str, x_admin_token: str = Header(None)):
     picked = generate.stored_tracks(rep)
     return {
         "video_settings": generate.video_settings(ev, rep),
-        "music": {k: music_mod.public(t) if t else None for k, t in picked.items()},
+        "music": _music_public([{"role": r, "track": picked[r]} for r in music_mod.ROLES if r in picked]),
         "text_md": rep["text_md"], "selection": db.jl(rep["selection"], []),
         "items": [item_public(r, admin=True) for r in rows],
         "segments": segs, "video_ready": bool(rep["video_ready"]), "album_ready": bool(rep["album_ready"]),
@@ -621,7 +693,8 @@ def remove_segment(slug: str, index: int, x_admin_token: str = Header(None)):
     segs = db.jl(rep["montage"], [])
     if not 0 <= index < len(segs):
         err(404, "Extrait introuvable.")
-    segs.pop(index)
+    victim = segs[index]
+    segs = video_mod.keep_segments(segs, lambda s: s is not victim)  # marque de séquence passée au plan suivant
     db.update("reports", "event_id", ev["id"], montage=json.dumps(segs, ensure_ascii=False))
     _rerender(ev["id"], {"video"})
     return {"ok": True}

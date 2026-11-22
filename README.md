@@ -30,17 +30,39 @@ retrouve sur la page d'accueil, dans « Mes événements », après saisie du co
 
 ## Réglages vidéo et musique
 
-L'écran « Générer » est rangé en trois sections : Histoire, Musique, Format.
+L'écran « Générer » est rangé en quatre sections : Histoire, Musique, Montage, Format. Tout est
+pré-rempli selon le type d'événement ; ce que tu as modifié à la main n'est pas écrasé quand tu changes
+de type.
 
 - **Ton** : 10 choix, 2 au maximum. Le même ton sert au compte rendu écrit et au film ; le changer à
   la génération le change pour l'événement entier. Il est pré-rempli selon le type d'événement
   (10 types). Les anciens tons et types sont convertis automatiquement au démarrage.
+- **Rythme du montage** : Posé (plans de 3 à 5 s, fondus), Dynamique (1,5 à 3 s, coupes calées sur
+  les temps de la musique), Clip nerveux (0,5 à 1,5 s, coupes franches, quelques plans plus longs).
+  Avec peu de photos et de vidéos, un clip nerveux peut durer moins que la durée choisie (le montage
+  ne rallonge jamais les plans au-delà de son rythme).
+  Les coupes sont calées sur le tempo du morceau principal ; les autres morceaux d'une évolution et
+  « Changer la musique » gardent cette grille.
+- **Effets** (interrupteurs) : ralentis, accélérés, arrêts sur image, effets humoristiques (zoom
+  comique), sous-titres des citations. Un effet coupé n'est jamais utilisé.
+- **Style des titres** : Carnet manuscrit (police Caveat, licence OFL, dans `backend/app/fonts`),
+  Sobre, Pop coloré, ou Aucun (plus de cartons de séquence ; le carton de crédit musique reste, et
+  les morceaux d'une évolution changent toujours au début des séquences).
+- **Cadrage** : horizontal 16:9, vertical 9:16 ou carré 1:1. L'image est toujours entière, sur un
+  fond flou : jamais d'étirement ni de recadrage qui couperait un visage.
+- **Évolution de la musique** : Constante, Montée progressive (début, cœur, sommet), Calme puis
+  explosion, Festif puis émotion. Les morceaux s'enchaînent en fondu de 2 s au début des séquences ;
+  un morceau qui durerait moins de 4 s est retiré, et le morceau principal est toujours joué.
+- **Préréglages** : « Enregistrer comme préréglage » garde les tons et les réglages du film (pas le
+  type ni les consignes) ; ils sont proposés en haut de l'écran pour tous les événements.
 - **Catalogue musical** (`music/catalogue.json`) : chaque morceau est étiqueté par genre, énergie
   (1 à 5) et humeur. L'appli filtre le catalogue d'après les réglages, sans laisser l'IA interpréter
   librement. Règle anti-mélancolie : aucun morceau mélancolique ou triste, sauf si le ton contient
-  Tendre ou Nostalgique (exception : la séquence finale d'une fin Touchante). Les fichiers
+  Tendre ou Nostalgique (exception : la séquence finale d'une fin Touchante ou de l'évolution
+  « Festif puis émotion »). Les fichiers
   téléchargés trop petits ou illisibles sont refusés, et un morceau illisible n'est jamais choisi.
-- **Pré-écoute** : 15 s du morceau proposé, avec « Autre titre » pour en changer avant de générer.
+- **Pré-écoute** : 15 s de chaque morceau proposé (Début, Cœur, Sommet, Final selon l'évolution),
+  chacun avec « Autre titre » pour en changer avant de générer.
 - **Relecture** : « Changer la musique » remplace la bande-son sans refaire le montage.
 - **Bibliothèque Incompetech** (Kevin MacLeod, CC BY 4.0) : téléchargée au démarrage du worker dans
   le volume de données, une seule fois. Pour le faire à la main : `python tools/fetch_music.py

@@ -45,7 +45,7 @@ def defaults(event_type: str) -> dict:
 def _int(value, default: int) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError : Infinity (JSON)
         return default
 
 
@@ -53,13 +53,13 @@ def normalize(raw: dict | None, event_type: str) -> dict:
     raw = raw or {}
     d = defaults(event_type)
     ending = raw.get("ending")
-    if ending not in config.ENDINGS:
+    if not isinstance(ending, str) or ending not in config.ENDINGS:
         ending = d["ending"]
     genres_in = raw.get("genres")
     genres: list[str] = []
     if isinstance(genres_in, (list, tuple)):
         for g in genres_in:
-            if g in config.GENRES and g not in genres:
+            if isinstance(g, str) and g in config.GENRES and g not in genres:
                 genres.append(g)
     if not genres:
         genres = d["genres"]
@@ -70,5 +70,27 @@ def normalize(raw: dict | None, event_type: str) -> dict:
         duration = 120
     subtitles = raw.get("subtitles", True)
     subtitles = True if subtitles is None else bool(subtitles)
+    rhythm = raw.get("rhythm")
+    if not isinstance(rhythm, str) or rhythm not in config.RHYTHMS:
+        rhythm = d["rhythm"]
+    evolution = raw.get("evolution")
+    if not isinstance(evolution, str) or evolution not in config.EVOLUTIONS:
+        evolution = d["evolution"]
+    effects_in = raw.get("effects")
+    if not isinstance(effects_in, dict):
+        effects_in = {}
+    effects = {}
+    for key in config.EFFECTS:
+        default = d["humor_fx"] if key == "humor" else True
+        value = effects_in.get(key)
+        effects[key] = value if isinstance(value, bool) else default
+    title_style = raw.get("title_style")
+    if not isinstance(title_style, str) or title_style not in config.TITLE_STYLES:
+        title_style = "carnet"
+    framing = raw.get("framing")
+    if not isinstance(framing, str) or framing not in config.FRAMINGS:
+        framing = "16:9"
     return {"ending": ending, "genres": genres, "energy": energy,
-            "mix": mix, "duration": duration, "subtitles": subtitles}
+            "mix": mix, "duration": duration, "subtitles": subtitles,
+            "rhythm": rhythm, "evolution": evolution, "effects": effects,
+            "title_style": title_style, "framing": framing}

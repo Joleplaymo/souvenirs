@@ -54,6 +54,10 @@ Fin choisie : **{{fin}}**.
 - Sélectionne les médias les plus intéressants et évite les doublons. Ne cherche pas à tout utiliser.
 - Privilégie les vidéos lorsqu'elles apportent du mouvement ou de l'émotion.
 - Alterne plans larges, portraits, scènes collectives et détails.
+- Rythme **{{rythme_nom}}** : {{rythme}}. Cale les changements de plans sur la musique.
+- Effets (champ `effect` de chaque segment) : {{effets}}
+- Titres de séquence : {{style_titres}}
+- Cadrage **{{cadrage_nom}}** : {{cadrage}}
 - Sous-titres : {{sous_titres}}. Si c'est « non », `text` reste une chaîne vide sur les segments `photo` et `video` (seuls les cartons `title` portent du texte).
 - Durée cible : {{duree}} (±5 %).
 - Respecte les visages et l'apparence naturelle des personnes. Ne crée aucune scène fictive et n'invente aucun fait : reste fidèle à ce que le groupe a réellement enregistré.

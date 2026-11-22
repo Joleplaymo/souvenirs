@@ -202,7 +202,7 @@ def test_preview_empty_catalogue_message(pick_lib):
     slug, h = _event_with_music()
     r = _pick(slug, h, video_settings={}, exclude=[])
     assert r.status_code == 200
-    assert r.json() == {"main": None, "final": None, "message": NO_MUSIC}
+    assert r.json() == {"tracks": [], "main": None, "final": None, "message": NO_MUSIC}
     assert _rep(slug)["music"] == STORED
 
 
@@ -225,7 +225,7 @@ def test_preview_incompatible_catalogue_gives_no_music(pick_lib, mp3):
     slug, h = _event_with_music(tone="drole,festif")
     r = _pick(slug, h, video_settings={}, exclude=[])
     assert r.status_code == 200
-    assert r.json() == {"main": None, "final": None, "message": NO_MUSIC}
+    assert r.json() == {"tracks": [], "main": None, "final": None, "message": NO_MUSIC}
     assert _rep(slug)["music"] == STORED
 
 
