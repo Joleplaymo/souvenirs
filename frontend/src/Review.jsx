@@ -3,7 +3,7 @@ import { api, mediaUrl, tokens, fmtTime, fmtDur, KIND } from "./api.js";
 import Markdown from "./Markdown.jsx";
 import Versions from "./Versions.jsx";
 import { useJob, JobProgress } from "./Generate.jsx";
-import MusicPreview, { musicRoles } from "./MusicPreview.jsx";
+import MusicPreview, { musicRoles, ROLE_LABEL } from "./MusicPreview.jsx";
 import Film from "./Film.jsx";
 import { Toast } from "./App.jsx";
 
@@ -53,8 +53,11 @@ export default function Review({ slug, ev, reload, goGenerate }) {
   const current = musicRoles(d && d.music); // musique du film actuel, { rôle: id }
   const proposed = musicRoles(newMusic);
   const hasProposal = !!(newMusic && !newMusic.error && Object.keys(proposed).length);
-  const sameMusic = hasProposal && Object.keys(proposed).length === Object.keys(current).length
-    && Object.entries(proposed).every(([r, id]) => current[r] === id);
+  const curIds = [...new Set(Object.values(current))].sort((a, b) => a - b);
+  const newIds = [...new Set(Object.values(proposed))].sort((a, b) => a - b);
+  const sameMusic = hasProposal && newIds.join(",") === curIds.join(","); // mêmes morceaux, même dans un autre ordre
+  // Chaque rôle de la proposition écarte tous les morceaux du film actuel (sinon l'un revient dans un autre rôle).
+  const notCurrent = Object.fromEntries(Object.keys(ROLE_LABEL).map((r) => [r, curIds]));
   const canChangeMusic = hasProposal && !sameMusic; // seulement ce qui est affiché et écouté
   const changeMusic = () => {
     if (!canChangeMusic) return;
@@ -129,7 +132,7 @@ export default function Review({ slug, ev, reload, goGenerate }) {
             {changing && (
               <div className="change-music">
                 <MusicPreview slug={slug} tones={ev.tones} settings={d.video_settings} disabled={busy} onChange={setNewMusic}
-                  initialExclude={Object.fromEntries(Object.entries(current).map(([r, id]) => [r, [id]]))} />
+                  initialExclude={notCurrent} />
                 {newMusic && !newMusic.error && !hasProposal && <p className="muted small">Rien à proposer pour ces réglages : le film garde sa musique actuelle.</p>}
                 {sameMusic && <p className="muted small">C'est déjà la musique du film : essaie « Autre titre ».</p>}
                 <p className="muted small">Seule la bande-son change : les plans, le texte et l'album restent les mêmes. Pour changer de genre, d'énergie, d'évolution ou de fin, passe par l'écran Générer.</p>
