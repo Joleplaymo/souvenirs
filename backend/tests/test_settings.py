@@ -131,3 +131,14 @@ def test_config_lists_exposed():
     assert set(config.EVOLUTIONS) == {"constante", "montee", "calme_explosion", "festif_emotion"}
     for d in config.TYPE_DEFAULTS.values():
         assert d["rhythm"] in config.RHYTHMS and d["evolution"] in config.EVOLUTIONS
+
+
+def test_normalize_survives_wrong_types():
+    """Listes, objets ou nombres infinis à la place des valeurs attendues : valeurs par défaut, jamais d'erreur."""
+    d = settings.normalize(None, "weekend")
+    n = settings.normalize({"ending": ["festive"], "genres": [["pop"], {"a": 1}, "funk"], "energy": float("inf"),
+                            "mix": float("-inf"), "duration": float("nan")}, "weekend")
+    assert n["ending"] == d["ending"] and n["genres"] == ["funk"]
+    assert (n["energy"], n["mix"], n["duration"]) == (d["energy"], d["mix"], d["duration"])
+    n = settings.normalize({"ending": {"x": 1}, "genres": {"pop": True}}, "weekend")
+    assert n["ending"] == d["ending"] and n["genres"] == d["genres"]

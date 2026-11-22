@@ -90,3 +90,70 @@ def test_recredit_keeps_film_title_style(stub, tmp_path, monkeypatch):
     monkeypatch.setattr(video, "title_card", lambda *a, **k: (calls.append((a, k)), real(*a, **k))[1])
     video.recredit(out.parent / video.BASE, CC)
     assert len(calls) == 1 and (calls[0][0] + (calls[0][1].get("style"),))[3 if len(calls[0][0]) > 3 else -1] == "pop"
+
+
+# « Aucun » : plus de cartons, mais les débuts de séquence restent marqués (évolution de la musique, morceau final)
+SEQ_PLAN = {"segments": [{"type": "title", "text": "Ouverture"},
+                         {"type": "photo", "item_id": 1, "duration": 5},
+                         {"type": "photo", "item_id": 3, "duration": 5},
+                         {"type": "title", "text": "Samedi"},
+                         {"type": "photo", "item_id": 1, "duration": 5},
+                         {"type": "photo", "item_id": 3, "duration": 5},
+                         {"type": "title", "text": "Dimanche"},
+                         {"type": "photo", "item_id": 1, "duration": 5},
+                         {"type": "title", "text": "Le soir"},
+                         {"type": "title", "text": "Doublon"},
+                         {"type": "photo", "item_id": 3, "duration": 5},
+                         {"type": "photo", "item_id": 1, "duration": 5},
+                         {"type": "title", "text": "Sans suite"}]}
+AUCUN = video.Style(rhythm="pose", title_style="aucun")
+
+
+def test_aucun_keeps_sequence_markers(stub):
+    segs = video.normalize(SEQ_PLAN, stub, 0, AUCUN)
+    assert [s["type"] for s in segs] == ["photo"] * 7
+    # l'ouverture (début du film) ne marque rien ; deux titres de suite : une seule marque ; titre final : rien
+    assert [bool(s.get("section")) for s in segs] == [False, False, True, False, True, True, False]
+    assert video.section_starts(segs) == [10.0, 20.0, 25.0]
+    # avec des cartons : les cartons marquent les séquences, aucun drapeau
+    with_titles = video.normalize(SEQ_PLAN, stub, 0, video.Style(rhythm="pose", title_style="sobre"))
+    assert not any(s.get("section") for s in with_titles)
+
+
+def test_section_marker_moves_when_segment_removed():
+    segs = [{"type": "photo", "item_id": 1, "duration": 5.0},
+            {"type": "photo", "item_id": 2, "duration": 5.0, "section": True},
+            {"type": "photo", "item_id": 3, "duration": 5.0}]
+    kept = video.keep_segments(segs, lambda s: s["item_id"] != 2)
+    assert [s["item_id"] for s in kept] == [1, 3] and kept[1].get("section")
+    assert video.section_starts(kept) == [5.0]
+    assert not segs[2].get("section")  # liste d'origine inchangée
+
+
+def test_normalize_trim_keeps_markers(stub):
+    """Durée cible courte : des plans du milieu sont retirés, les marques de séquence restent."""
+    plan = {"segments": [{"type": "photo", "item_id": 1, "duration": 5}] * 4 + [{"type": "title", "text": "B"}]
+            + [{"type": "photo", "item_id": 3, "duration": 5}] * 4 + [{"type": "title", "text": "C"}]
+            + [{"type": "photo", "item_id": 1, "duration": 5}] * 4}
+    segs = video.normalize(plan, stub, 25, AUCUN)
+    assert sum(s["duration"] for s in segs) <= 25 * 1.1
+    assert len(video.section_starts(segs)) == 2
+
+
+def test_aucun_render_records_sections_and_plays_evolution(stub, tmp_path, monkeypatch):
+    """Film sans cartons en montée + fin touchante : les morceaux changent aux débuts de séquence."""
+    monkeypatch.setattr(video, "DEFAULT_FRAME", video.Frame(320, 180))
+    segs = video.normalize(SEQ_PLAN, stub, 0, AUCUN)
+    out = tmp_path / "out" / "video.mp4"
+    out.parent.mkdir()
+    src = tmp_path / "s.mp3"
+    import subprocess
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                    str(src)], check=True)
+    tracks = [{"role": r, "path": src, "credit": f"Musique : {r}"} for r in ("intro", "main", "peak", "final")]
+    video.render(segs, stub, out, tracks, 50, style=AUCUN, evolution="montee")
+    meta = video.read_meta(out.parent / video.BASE)
+    assert [round(s) for s in meta["sections"]] == [10, 20, 25]
+    played = video.place_tracks(["intro", "main", "peak", "final"], video.meta_sections(meta), meta["body"], "montee")
+    assert len(played) > 1 and "final" in dict(played), played
+    assert len(meta["credits"]) == len(played) > 1

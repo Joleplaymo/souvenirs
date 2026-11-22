@@ -310,9 +310,39 @@ def _fit(segs: list[dict], items: dict, style, snap: bool):
             since_long = 0 if s["duration"] > SHOT_BOUNDS["nerveux"][1] + 1e-6 else since_long + 1
 
 
+def keep_segments(segs: list[dict], keep) -> list[dict]:
+    """Segments pour lesquels keep(s) est vrai. La marque de début de séquence (« section », posée quand les
+    cartons sont retirés) d'un segment écarté passe au suivant gardé, sauf si c'est un carton (il marque déjà)."""
+    out, carry = [], False
+    for s in segs:
+        if not keep(s):
+            carry = carry or bool(s.get("section"))
+            continue
+        if carry and s["type"] != "title" and not s.get("section"):
+            s = {**s, "section": True}
+        carry = False
+        out.append(s)
+    return out
+
+
+def _trim(segs: list[dict], target: int) -> bool:
+    """Encore trop long : retire des plans depuis le milieu (marques de séquence gardées). Vrai si retrait."""
+    cut = False
+    while sum(s["duration"] for s in segs) > target * 1.1 and len(segs) > 2:
+        mids = [i for i, s in enumerate(segs) if s["type"] != "title" and 0 < i < len(segs) - 1]
+        if not mids:
+            break
+        victim = segs[mids[len(mids) // 2]]
+        segs[:] = keep_segments(segs, lambda s: s is not victim)
+        cut = True
+    return cut
+
+
 def normalize(plan: dict, items: dict, target: int, style: Style | None = None) -> list[dict]:
     """Valide le plan de Claude et l'ajuste à la durée demandée.
-    Sans style : bornes d'avant les rythmes (titre 2–3,5 s, photo 2–6 s, vidéo jusqu'à 30 s), aucun effet."""
+    Sans style : bornes d'avant les rythmes (titre 2–3,5 s, photo 2–6 s, vidéo jusqu'à 30 s), aucun effet.
+    Style « aucun » : les cartons de séquence sont retirés, mais le premier plan de chaque séquence (sauf au
+    début du film) porte "section": True, pour placer les morceaux de l'évolution comme sur un carton."""
     r = _rhythm(style)
 
     def asked(s, default, lo, hi):  # avec un rythme, la durée demandée est bornée ensuite par _fit
@@ -320,12 +350,15 @@ def normalize(plan: dict, items: dict, target: int, style: Style | None = None) 
         return d if r is not None else min(hi, max(lo, d))
 
     segs = []
+    pending = False  # un carton de séquence vient d'être retiré (style « aucun »)
     for s in (plan or {}).get("segments", []):
         t = s.get("type")
         text = (s.get("text") or "").strip()
         if t == "title" and text:
             if style is not None and style.title_style == "aucun":
-                continue  # pas de carton de séquence (le crédit musical, ajouté par render, reste)
+                # pas de carton (le crédit musical, ajouté par render, reste) ; le plan suivant marque la séquence
+                pending = pending or bool(segs)
+                continue
             segs.append({"type": "title", "item_id": 0, "text": text[:80], "effect": "none",
                          "duration": asked(s, 2.5, 2.0, 3.5)})
             continue
@@ -345,6 +378,11 @@ def normalize(plan: dict, items: dict, target: int, style: Style | None = None) 
             segs.append({"type": "video", "item_id": it["id"], "text": text[:140],
                          "effect": _effect(s.get("effect"), "video", style),
                          "start": round(start, 2), "duration": round(min(end - start, 30.0), 2)})
+        else:
+            continue
+        if pending:
+            segs[-1]["section"] = True
+            pending = False
     # un carton de titre sans rien derrière n'a pas de sens
     while segs and segs[-1]["type"] == "title":
         segs.pop()
@@ -362,13 +400,14 @@ def normalize(plan: dict, items: dict, target: int, style: Style | None = None) 
             else:  # planchers du rythme (sinon le rythme nerveux serait impossible)
                 floor = TITLE_BOUNDS[0] if s["type"] == "title" else SHOT_BOUNDS[r][0]
             s["duration"] = round(max(floor, s["duration"] * k), 2)
-        while total() > target * 1.1 and len(segs) > 2:  # encore trop long : on retire depuis le milieu
-            mids = [i for i, s in enumerate(segs) if s["type"] != "title" and 0 < i < len(segs) - 1]
-            if not mids:
-                break
-            segs.pop(mids[len(mids) // 2])
+        _trim(segs, target)  # encore trop long : on retire depuis le milieu
     if r is not None:
         _fit(segs, items, style, snap=True)
+        # le calage sur le tempo arrondit au temps le plus proche sans passer sous le plancher : il peut
+        # rallonger le film ; on retire encore des plans du milieu, puis on recale (retirer un plan peut
+        # rapprocher deux plans longs du rythme nerveux)
+        if target and _trim(segs, target):
+            _fit(segs, items, style, snap=True)
     return segs
 
 
@@ -386,6 +425,9 @@ def _render_segment(seg, item, tmp: Path, idx: int, frame: Frame = DEFAULT_FRAME
     dur = seg["duration"]
     effect = seg.get("effect") or "none"
     fd = fade_for(style)
+    if seg["type"] == "video" and item is not None and item["duration"]:
+        # jamais plus long que ce que la source permet avec l'effet (sinon : silence et image manquante)
+        dur = min(dur, round(_max_out(effect, float(item["duration"])), 3))
     fade = (f"fade=t=in:st=0:d={fd},fade=t=out:st={max(0, dur - fd):.2f}:d={fd}," if fd else "") + "format=yuv420p"
     sub = None
     if seg["type"] != "title" and seg.get("text"):
@@ -469,10 +511,11 @@ def credit_lines(credits) -> list[str]:
 
 
 def section_starts(segs: list[dict]) -> list[float]:
-    """Débuts prévus des cartons de titre (ouverture comprise), d'après les durées du plan."""
+    """Débuts prévus des séquences, d'après les durées du plan : cartons de titre (ouverture comprise) et
+    plans marqués "section" (style « aucun »)."""
     out, t = [], 0.0
     for s in segs:
-        if s["type"] == "title":
+        if s["type"] == "title" or s.get("section"):
             out.append(round(t, 3))
         t += float(s["duration"])
     return out
@@ -591,15 +634,21 @@ def render(segs: list[dict], items: dict, out: Path, tracks, mix: int, frame: Fr
     tmp.mkdir(parents=True)
     try:
         files, t, sections = [], 0.0, []
+        carry = False  # plan marqué "section" ignoré : la marque passe au plan suivant monté
         for i, seg in enumerate(segs):
             try:
                 f = _render_segment(seg, items.get(seg["item_id"]), tmp, i, frame, style)
             except Exception as e:  # un extrait illisible ne doit pas faire échouer tout le montage
                 print(f"[montage] segment {i} ignoré : {e}", flush=True)
                 f = None
-            if f is not None:
-                if seg["type"] == "title":
-                    sections.append(round(t, 3))  # début réel du carton (durées sondées, segments ignorés exclus)
+            if f is None:
+                carry = carry or bool(seg.get("section"))
+            else:
+                # début réel d'un carton, ou du premier plan d'une séquence sans carton (style « aucun ») ;
+                # durées sondées, segments ignorés exclus
+                if seg["type"] == "title" or seg.get("section") or carry:
+                    sections.append(round(t, 3))
+                carry = False
                 files.append(f)
                 t += media.probe(f)["duration"] or seg["duration"]
             if on_progress:

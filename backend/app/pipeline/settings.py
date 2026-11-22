@@ -45,7 +45,7 @@ def defaults(event_type: str) -> dict:
 def _int(value, default: int) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError : Infinity (JSON)
         return default
 
 
@@ -53,13 +53,13 @@ def normalize(raw: dict | None, event_type: str) -> dict:
     raw = raw or {}
     d = defaults(event_type)
     ending = raw.get("ending")
-    if ending not in config.ENDINGS:
+    if not isinstance(ending, str) or ending not in config.ENDINGS:
         ending = d["ending"]
     genres_in = raw.get("genres")
     genres: list[str] = []
     if isinstance(genres_in, (list, tuple)):
         for g in genres_in:
-            if g in config.GENRES and g not in genres:
+            if isinstance(g, str) and g in config.GENRES and g not in genres:
                 genres.append(g)
     if not genres:
         genres = d["genres"]

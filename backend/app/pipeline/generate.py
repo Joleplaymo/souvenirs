@@ -166,7 +166,7 @@ def style(st: dict, chosen: list[dict]) -> video.Style:
 
 def render_video(ev, rep, prog, lo, hi):
     items = {it["id"]: it for it in timeline.load_items(ev["id"])}
-    segs = [s for s in db.jl(rep["montage"], []) if s["item_id"] == 0 or s["item_id"] in items]
+    segs = video.keep_segments(db.jl(rep["montage"], []), lambda s: s["item_id"] == 0 or s["item_id"] in items)
     while segs and segs[-1]["type"] == "title":
         segs.pop()
     st = video_settings(ev, rep)

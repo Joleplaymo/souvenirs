@@ -282,3 +282,34 @@ def test_plan_tracks_never_repeats(lib):
     other = _roles(music.plan_tracks(["drole"], st, exclude={"main": [main]}))
     assert other["main"]["id"] != main
     assert len({t["id"] for t in other.values()}) == len(other)
+
+
+def _energies(plan):
+    return {p["role"]: p["track"]["energy"] for p in plan}
+
+
+def test_montee_never_inverted(lib):
+    """Montée : le début n'est jamais plus énergique que le cœur, le sommet jamais moins ; sinon le rôle est omis."""
+    st = {**settings.defaults("weekend"), "evolution": "montee", "energy": 4}
+    # seuls des morceaux à 5 en plus du cœur : le début (cible 3, repli ±2) prendrait un 5
+    lib([entry("coeur", "joyeux", ["funk"], 4), entry("fort-a", "festif", ["funk"], 5),
+         entry("fort-b", "festif", ["funk"], 5)])
+    plan = music.plan_tracks(["drole"], st)
+    assert [p["role"] for p in plan] == ["main", "peak"] and _energies(plan) == {"main": 4, "peak": 5}
+    # seuls des morceaux à 2 en plus du cœur : le sommet (cible 4, repli ±2) prendrait un 2
+    lib([entry("coeur", "joyeux", ["funk"], 3), entry("doux-a", "joyeux", ["funk"], 2),
+         entry("doux-b", "joyeux", ["funk"], 2)])
+    db.run("DELETE FROM tracks WHERE key NOT IN ('coeur', 'doux-a', 'doux-b')")
+    plan = music.plan_tracks(["drole"], {**st, "energy": 3})
+    assert [p["role"] for p in plan] == ["intro", "main"] and _energies(plan) == {"intro": 2, "main": 3}
+
+
+def test_montee_prefers_strict_climb(lib):
+    """Un début de même énergie que le cœur n'est pris que s'il n'y a rien de plus calme."""
+    st = {**settings.defaults("weekend"), "evolution": "montee", "energy": 4}
+    lib([entry("coeur", "joyeux", ["funk"], 4), entry("pareil", "joyeux", ["funk"], 4),
+         entry("calme", "joyeux", ["funk"], 2), entry("fort", "festif", ["funk"], 5)])
+    assert _energies(music.plan_tracks(["drole"], st)) == {"intro": 2, "main": 4, "peak": 5}
+    # rien de plus calme : un début à la même énergie reste possible (jamais au-dessus)
+    db.run("DELETE FROM tracks WHERE key='calme'")
+    assert _energies(music.plan_tracks(["drole"], st)) == {"intro": 4, "main": 4, "peak": 5}

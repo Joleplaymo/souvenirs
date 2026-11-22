@@ -357,9 +357,9 @@ def _remove_from_draft(event_id: int, item_id: int) -> set:
     if item_id in sel:
         db.update("reports", "event_id", event_id, selection=json.dumps([i for i in sel if i != item_id]))
     segs = db.jl(rep["montage"], [])
-    if any(s["item_id"] == item_id for s in segs):
-        db.update("reports", "event_id", event_id,
-                  montage=json.dumps([s for s in segs if s["item_id"] != item_id], ensure_ascii=False))
+    if any(s["item_id"] == item_id for s in segs):  # marques de séquence (style « aucun ») gardées
+        db.update("reports", "event_id", event_id, montage=json.dumps(
+            video_mod.keep_segments(segs, lambda s: s["item_id"] != item_id), ensure_ascii=False))
         stale.add("video")
     return stale
 
@@ -693,7 +693,8 @@ def remove_segment(slug: str, index: int, x_admin_token: str = Header(None)):
     segs = db.jl(rep["montage"], [])
     if not 0 <= index < len(segs):
         err(404, "Extrait introuvable.")
-    segs.pop(index)
+    victim = segs[index]
+    segs = video_mod.keep_segments(segs, lambda s: s is not victim)  # marque de séquence passée au plan suivant
     db.update("reports", "event_id", ev["id"], montage=json.dumps(segs, ensure_ascii=False))
     _rerender(ev["id"], {"video"})
     return {"ok": True}

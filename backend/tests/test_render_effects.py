@@ -121,6 +121,23 @@ def test_normalize_snaps_to_beat(rhythm):
     _check_bounds(segs, rhythm)
 
 
+@pytest.mark.parametrize("rhythm", ["dynamique", "nerveux"])
+@pytest.mark.parametrize("bpm", [None, 90, 128])
+def test_normalize_snap_keeps_target(rhythm, bpm):
+    """Le calage sur le tempo ne rallonge pas le film au-delà de la durée cible (tolérance de normalize : 10 %)."""
+    items = {i: {"id": i, "event_id": 1, "kind": "photo"} for i in range(1, 21)}
+    plan = {"segments": [{"type": "title", "item_id": 0, "text": "Week-end", "duration": 3}]
+            + [{"type": "photo", "item_id": i, "text": "", "duration": 3, "effect": "none"} for i in range(1, 21)]}
+    segs = video.normalize(plan, items, 30, style(rhythm, bpm=bpm))
+    assert sum(s["duration"] for s in segs) <= 30 * 1.1 + 1e-6, [s["duration"] for s in segs]
+    assert len(segs) > 5
+    if bpm:  # toujours calé sur le tempo
+        beat = 60 / bpm / (2 if rhythm == "nerveux" else 1)
+        for s in segs:
+            assert abs(s["duration"] - round(s["duration"] / beat) * beat) <= 0.001, s  # durées au millième
+    _check_bounds(segs, rhythm)
+
+
 def test_normalize_pose_not_snapped():
     segs = video.normalize({"segments": [{"type": "photo", "item_id": 1, "text": "", "duration": 3.7,
                                           "effect": "none"}]}, ITEMS, 0, style("pose", bpm=120))
@@ -245,20 +262,36 @@ def _row(**cols):
     return con.execute(f"SELECT {names}", list(cols.values())).fetchone()
 
 
+def _video_stream_duration(path) -> float:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=duration",
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True)
+    return float(r.stdout.strip())
+
+
 @pytest.mark.parametrize("effect", ["none", "slowmo", "speedup", "freeze", "punch"])
 def test_video_segment_from_db_row(clip, tmp_path, effect):
     item = _row(id=2, event_id=1, kind="video", duration=3.0)
-    seg = _seg(effect, 2.0, start=2.5)
+    # accéléré : 1,4 s rendues demandent 2,8 s de source (la vidéo en fait 3)
+    seg = _seg(effect, 1.4, start=0.5) if effect == "speedup" else _seg(effect, 2.0, start=2.5)
     out = video._render_segment(seg, item, tmp_path, 0, SMALL, style())
-    assert abs(media.probe(out)["duration"] - 2.0) <= 0.1
+    assert abs(_video_stream_duration(out) - seg["duration"]) <= 0.1
+    assert abs(media.probe(out)["duration"] - seg["duration"]) <= 0.1
+
+
+def test_render_segment_caps_duration_to_source(clip, tmp_path):
+    """Plan plus long que ce que la source permet avec l'effet : ramené à la durée possible (pas de silence
+    ni d'image figée ajoutés). 3 s de source en accéléré → 1,5 s au plus."""
+    out = video._render_segment(_seg("speedup", 2.0), clip[2], tmp_path, 0, SMALL, style())
+    assert abs(_video_stream_duration(out) - 1.5) <= 0.1
+    assert abs(media.probe(out)["duration"] - 1.5) <= 0.1
 
 
 def test_render_keeps_video_from_db_row(clip, tmp_path):
-    """Un extrait vidéo venu de la base n'est pas ignoré par render (2 s de photo + 2 s de vidéo)."""
+    """Un extrait vidéo venu de la base n'est pas ignoré par render (2 s de photo + 1,4 s de vidéo accélérée)."""
     items = {1: _row(id=1, event_id=1, kind="photo", duration=None),
              2: _row(id=2, event_id=1, kind="video", duration=3.0)}
-    segs = [{"type": "photo", "item_id": 1, "text": "", "duration": 2.0, "effect": "none"}, _seg("speedup", 2.0, 0.5)]
+    segs = [{"type": "photo", "item_id": 1, "text": "", "duration": 2.0, "effect": "none"}, _seg("speedup", 1.4, 0.5)]
     out = tmp_path / "o" / "video.mp4"
     out.parent.mkdir()
     total = video.render(segs, items, out, {"main": None, "final": None, "credits": []}, 50, SMALL, style())
-    assert abs(total - 4.0) <= 0.2
+    assert abs(total - 3.4) <= 0.2

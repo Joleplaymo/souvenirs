@@ -163,15 +163,18 @@ def allowed(track: dict, tones: list[str], final: bool, ending: str, evolution: 
     return bool(final and (ending == "touchante" or evolution == "festif_emotion"))
 
 
-def candidates(tones: list[str], settings: dict, final: bool = False, exclude=(), target: int | None = None) -> list[dict]:
+def candidates(tones: list[str], settings: dict, final: bool = False, exclude=(), target: int | None = None,
+               accept=None) -> list[dict]:
     """Morceaux permis les plus proches de l'énergie cible (réglages par défaut) : même genre à ±1,
-    puis tout genre à ±1, puis ±2. L'humeur n'est jamais assouplie."""
+    puis tout genre à ±1, puis ±2. L'humeur n'est jamais assouplie. `accept(morceau)` : filtre en plus."""
     target = settings.get("energy", 3) if target is None else target
     wanted = set(settings.get("genres") or [])
     ending, evolution = settings.get("ending"), settings.get("evolution", "constante")
     pool = []
     for t in all_tracks():
         if t["id"] in exclude or not usable(t) or not allowed(t, tones, final, ending, evolution):
+            continue
+        if accept is not None and not accept(t):
             continue
         pool.append((abs(t["energy"] - target), -len(wanted & set(t["genres"])), t["id"], t))
     pool.sort(key=lambda x: x[:3])
@@ -212,7 +215,9 @@ def _calm(role, tones, settings, used) -> dict | None:
     return best[1] if best else None
 
 
-def _pick_role(role, tones, settings, used) -> dict | None:
+def _pick_role(role, tones, settings, used, ref=None) -> dict | None:
+    """Morceau d'un rôle. `ref` (montée) : énergie du morceau principal ; le début n'est jamais au-dessus,
+    le sommet jamais en dessous (strictement quand c'est possible, sinon à égalité) ; sinon rôle omis."""
     evolution = settings.get("evolution", "constante")
     if role == "final" or (role == "intro" and evolution == "calme_explosion"):
         return _calm(role, tones, settings, used)
@@ -223,8 +228,17 @@ def _pick_role(role, tones, settings, used) -> dict | None:
         target = energy - 1
     else:
         target = energy
-    got = candidates(tones, settings, final=False, exclude=used, target=max(1, min(5, target)))
-    return got[0] if got else None
+    target = max(1, min(5, target))
+    if ref is None or role not in ("intro", "peak"):
+        got = candidates(tones, settings, final=False, exclude=used, target=target)
+        return got[0] if got else None
+    sign = -1 if role == "intro" else 1
+    for strict in (True, False):
+        got = candidates(tones, settings, final=False, exclude=used, target=target,
+                         accept=lambda t: sign * (t["energy"] - ref) > (0 if strict else -1))
+        if got:
+            return got[0]
+    return None
 
 
 def plan_tracks(tones: list[str], settings: dict, exclude: dict | None = None, keep: dict | None = None) -> list[dict]:
@@ -244,7 +258,11 @@ def plan_tracks(tones: list[str], settings: dict, exclude: dict | None = None, k
             used.add(t["id"])
     for role in PICK_ORDER:
         if role in roles and role not in chosen:
-            t = _pick_role(role, tones, settings, used | set(exclude.get(role) or ()))
+            # montée : début et sommet bornés par l'énergie du cœur (choisi d'abord), jamais inversés
+            ref = None
+            if evolution == "montee":
+                ref = chosen["main"]["energy"] if "main" in chosen else settings.get("energy", 3)
+            t = _pick_role(role, tones, settings, used | set(exclude.get(role) or ()), ref)
             if t:
                 chosen[role] = t
                 used.add(t["id"])

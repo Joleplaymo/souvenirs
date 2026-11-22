@@ -76,3 +76,15 @@ def test_preset_invalid_name_or_settings_400():
     assert r.status_code == 400
     r = client.post(f"/api/events/{a}/presets", json={"name": "x" * 60, "tones": ["drole"], "video_settings": {}}, headers=ha)
     assert r.status_code == 200
+
+
+def test_preset_wrong_types_never_500():
+    _clean()
+    a, ha = _event()
+    raw = ('{"name": "Bizarre", "tones": ["drole"], "video_settings": {"ending": ["festive"], '
+           '"genres": [["pop"]], "energy": Infinity, "mix": -Infinity, "duration": NaN}}')
+    r = client.post(f"/api/events/{a}/presets", content=raw, headers={**ha, "content-type": "application/json"})
+    assert r.status_code in (200, 400), r.text
+    if r.status_code == 200:
+        vs = r.json()["video_settings"]
+        assert vs["ending"] == "festive" and vs["energy"] == 4 and vs["genres"] == ["pop", "electro", "funk"]
