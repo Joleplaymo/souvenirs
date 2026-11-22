@@ -39,10 +39,15 @@ de type.
   (10 types). Les anciens tons et types sont convertis automatiquement au démarrage.
 - **Rythme du montage** : Posé (plans de 3 à 5 s, fondus), Dynamique (1,5 à 3 s, coupes calées sur
   les temps de la musique), Clip nerveux (0,5 à 1,5 s, coupes franches, quelques plans plus longs).
+  Avec peu de photos et de vidéos, un clip nerveux peut durer moins que la durée choisie (le montage
+  ne rallonge jamais les plans au-delà de son rythme).
+  Les coupes sont calées sur le tempo du morceau principal ; les autres morceaux d'une évolution et
+  « Changer la musique » gardent cette grille.
 - **Effets** (interrupteurs) : ralentis, accélérés, arrêts sur image, effets humoristiques (zoom
   comique), sous-titres des citations. Un effet coupé n'est jamais utilisé.
 - **Style des titres** : Carnet manuscrit (police Caveat, licence OFL, dans `backend/app/fonts`),
-  Sobre, Pop coloré, ou Aucun (plus de cartons de séquence ; le carton de crédit musique reste).
+  Sobre, Pop coloré, ou Aucun (plus de cartons de séquence ; le carton de crédit musique reste, et
+  les morceaux d'une évolution changent toujours au début des séquences).
 - **Cadrage** : horizontal 16:9, vertical 9:16 ou carré 1:1. L'image est toujours entière, sur un
   fond flou : jamais d'étirement ni de recadrage qui couperait un visage.
 - **Évolution de la musique** : Constante, Montée progressive (début, cœur, sommet), Calme puis

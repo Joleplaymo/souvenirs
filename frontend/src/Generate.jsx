@@ -244,6 +244,7 @@ export default function Generate({ slug, ev, reload, goReview }) {
           <summary><h3>Montage</h3></summary>
           <Field label="Rythme">
             <Chips options={Object.entries(cfg.rhythms)} value={[form.rhythm]} max={1} onChange={([v]) => set("rhythm", v)} disabled={off} label="Rythme du montage" />
+            {form.rhythm === "nerveux" && <p className="muted small">Plans très courts : avec peu de photos et de vidéos, le film peut durer moins que la durée choisie.</p>}
           </Field>
           <div className="field">
             <div className="field-label">Effets</div>
